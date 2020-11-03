@@ -80,7 +80,8 @@ config_dict = {
     "zero_optimization": {
         "stage": 0,
         "reduce_bucket_size": 20
-    }
+    },
+    "opt_swap": True
 }
 #        "initial_scale_power": 15
 args = get_args('/tmp/', config_dict)
@@ -88,10 +89,17 @@ hidden_dim = 4
 
 model = SimpleModel(hidden_dim, empty_grad=False)
 
-model, _, _,_ = deepspeed.initialize(args=args,
-                                     model=model,
-                                     model_parameters=model.parameters(),
-                                     dist_init_required=True)
+#optimizer = torch.optim.Adam(model.parameters())
+
+model, _, _,_ = deepspeed.initialize(
+    args=args,
+    model=model,
+    model_parameters=model.parameters()
+)
+
+if torch.distributed.get_rank() == 0:
+    param_count = sum([p.numel() for p in model.parameters()])
+    print(f"number of parameters: {param_count}")
 
 
 def print_params(tag, model):
@@ -100,11 +108,13 @@ def print_params(tag, model):
             print0("{} {}:{}".format(tag, n, p))
 
 
+print(f'optimizer type: {type(model.optimizer)}')
+
 data_loader = get_data_loader(model=model,
                               total_samples=1000,
                               hidden_dim=hidden_dim,
                               device=model.device)
-#print_params('pre-train', model)
+print_params('pre-train', model)
 for n, batch in enumerate(data_loader):
     loss = model(batch[0], batch[1])
     if torch.distributed.get_rank() == 0:

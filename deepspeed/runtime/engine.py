@@ -627,6 +627,10 @@ class DeepSpeedEngine(Module):
                 clip_grad=clip_grad,
                 fused_lamb_legacy=self.optimizer_name() == LAMB_OPTIMIZER)
 
+        if self._config._param_dict.get("opt_swap", False):
+            from deepspeed.runtime.optimizer_swapper import OptimizerSwapper
+            optimizer = OptimizerSwapper(optimizer)
+
         return optimizer
 
     def _configure_zero_optimizer(self, optimizer):
