@@ -243,6 +243,7 @@ class FP16_Optimizer(object):
                 p.grad = None
 
             self.fp32_groups_flat[i].grad = grads_groups_flat[i]
+            print(f'fused-adam i={i}, grads_groups_flat[i]={grads_groups_flat[i]}')
 
         self.start_timers([COMPUTE_NORM])
         all_groups_norm = get_grad_norm(self.fp32_groups_flat, mpu=self.mpu)

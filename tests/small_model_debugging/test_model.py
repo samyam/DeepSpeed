@@ -66,7 +66,7 @@ torch.random.manual_seed(2222 + rank)
 
 config_dict = {
     "train_batch_size": 8,
-    "steps_per_print": 1,
+    "steps_per_print": 100,
     "optimizer": {
         "type": "Adam",
         "params": {
