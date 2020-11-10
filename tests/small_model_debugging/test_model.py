@@ -27,9 +27,9 @@ def create_config_from_dict(tmpdir, config_dict):
     return config_path
 
 
-def get_data_loader(model, total_samples, hidden_dim, device):
+def get_data_loader(model, total_samples, hidden_dim, device, dtype):
     batch_size = model.train_micro_batch_size_per_gpu()
-    train_data = torch.randn(total_samples, hidden_dim, device=device, dtype=torch.half)
+    train_data = torch.randn(total_samples, hidden_dim, device=device, dtype=dtype)
     train_label = torch.empty(total_samples,
                               dtype=torch.long,
                               device=device).random_(hidden_dim)
@@ -74,7 +74,7 @@ config_dict = {
         }
     },
     "fp16": {
-        "enabled": True,
+        "enabled": False,
         "initial_scale_power": 15
     },
     "zero_optimization": {
@@ -89,7 +89,15 @@ hidden_dim = 4
 
 model = SimpleModel(hidden_dim, empty_grad=False)
 
+
+def print_params(tag, model):
+    if True:  #torch.distributed.get_rank() == 0:
+        for n, p in model.named_parameters():
+            print("{} {}:{}".format(tag, n, p))
+
+
 #optimizer = torch.optim.Adam(model.parameters())
+print_params('pre-init', model)
 
 model, _, _,_ = deepspeed.initialize(
     args=args,
@@ -101,19 +109,18 @@ if torch.distributed.get_rank() == 0:
     param_count = sum([p.numel() for p in model.parameters()])
     print(f"number of parameters: {param_count}")
 
-
-def print_params(tag, model):
-    if torch.distributed.get_rank() == 0:
-        for n, p in model.named_parameters():
-            print0("{} {}:{}".format(tag, n, p))
-
-
 print(f'optimizer type: {type(model.optimizer)}')
+
+if model.fp16_enabled():
+    dtype = torch.half
+else:
+    dtype = torch.float
 
 data_loader = get_data_loader(model=model,
                               total_samples=1000,
                               hidden_dim=hidden_dim,
-                              device=model.device)
+                              device=model.device,
+                              dtype=dtype)
 print_params('pre-train', model)
 for n, batch in enumerate(data_loader):
     loss = model(batch[0], batch[1])

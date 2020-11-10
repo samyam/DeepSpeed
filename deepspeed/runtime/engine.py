@@ -588,6 +588,11 @@ class DeepSpeedEngine(Module):
         else:
             torch_optimizer = getattr(torch.optim, self.optimizer_name())
             optimizer = torch_optimizer(model_parameters, **optimizer_parameters)
+
+        if self._config._param_dict.get("opt_swap", False):
+            from deepspeed.runtime.optimizer_swapper_v2 import OptimizerSwapper
+            optimizer = OptimizerSwapper(optimizer)
+
         return optimizer
 
     def _configure_fp16_optimizer(self, optimizer):
@@ -626,10 +631,6 @@ class DeepSpeedEngine(Module):
                 mpu=self.mpu,
                 clip_grad=clip_grad,
                 fused_lamb_legacy=self.optimizer_name() == LAMB_OPTIMIZER)
-
-        if self._config._param_dict.get("opt_swap", False):
-            from deepspeed.runtime.optimizer_swapper import OptimizerSwapper
-            optimizer = OptimizerSwapper(optimizer)
 
         return optimizer
 
