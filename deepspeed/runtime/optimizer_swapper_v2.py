@@ -10,7 +10,7 @@ class OptimizerSwapper():
         print(f'optimizer swapper init, optimizer type: {type(self.optimizer)}')
         assert isinstance(self.optimizer, FusedAdam)
 
-        print(f'self.optimizer.state_dict()={self.optimizer.state_dict()}')
+        # print(f'self.optimizer.state_dict()={self.optimizer.state_dict()}')
 
         self.orig_param_groups = []
         self.param_partitions = []
@@ -38,7 +38,9 @@ class OptimizerSwapper():
                 p.grad = torch.zeros_like(p)
                 group['params'] = [p]
 
-                print('init optim step')
+                #print(f'self.optimizer.state={self.optimizer.state}')
+                self.optimizer.state[p] = {}
+
                 self.optimizer.step()
 
                 # Clear grad
@@ -52,24 +54,25 @@ class OptimizerSwapper():
 
                 # Swap out optimizer states
                 for key, state in self.optimizer.state[p].items():
-                    print(f'key={key}, state={state}')
+                    #print(f'key={key}, state={state}')
                     self.optimizer_states[group_idx][partition_idx][key] = state.to(
                         'cpu')
                     # Clear optimizer state
                     self.optimizer.state = {}  #[p][key] = None
 
-        print(
-            f'inside swapper, self.optimizer.param_groups={self.optimizer.param_groups}')
-
     def swap_in_partition(self, partition_idx):
         for group_idx, group in enumerate(self.optimizer.param_groups):
             # swap in p.data
-            p = self.param_partitions[group_idx][partition_idx].to('cuda')
+            self.param_partitions[group_idx][partition_idx] = self.param_partitions[
+                group_idx][partition_idx].to('cuda')
+            p = self.param_partitions[group_idx][partition_idx]
             # swap in p.grad
             p.grad = self.flat_grad_partitions[group_idx][partition_idx].to('cuda')
             group['params'] = [p]
             # swap in optim states
             for key, state in self.optimizer_states[group_idx][partition_idx].items():
+                if p not in self.optimizer.state:
+                    self.optimizer.state[p] = {}
                 self.optimizer.state[p][key] = state.to('cuda')
 
     def swap_out_partition(self, partition_idx):
@@ -88,7 +91,7 @@ class OptimizerSwapper():
             for key, state in self.optimizer.state[p].items():
                 # print(f'key={key}, state={state}')
                 self.optimizer_states[group_idx][partition_idx][key] = state.to('cpu')
-                self.optimizer.state = {}  #[p][key] = None
+                self.optimizer.state = {}
 
     def step(self):
         # g_32.append(p.grad.data)
@@ -98,9 +101,9 @@ class OptimizerSwapper():
 
         # flatten/partition p.grad
         self.flat_grad_partitions = []
-        for group_idx, group in enumerate(self.param_groups):
-            pgrads = [p.grad for p in group['params']]
-            print(pgrads)
+        for group_idx, group_params in enumerate(self.orig_param_groups):
+            pgrads = [p.grad for p in group_params]
+            # print(f'group_idx={group_idx}, pgrads={pgrads}')
             self.flat_grad_partitions.append(
                 self.get_partitions(_flatten_dense_tensors(pgrads),
                                     self.num_partitions))
@@ -114,7 +117,7 @@ class OptimizerSwapper():
         for group_idx, _ in enumerate(self.optimizer.param_groups):
             updated_params = _unflatten_dense_tensors(
                 torch.cat(self.param_partitions[group_idx]),
-                self.orig_param_groups)
+                self.orig_param_groups[group_idx])
             for p, q in zip(self.orig_param_groups[group_idx], updated_params):
                 p.data.copy_(q.data)
 
