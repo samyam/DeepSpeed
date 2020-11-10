@@ -72,11 +72,11 @@ class OptimizerSwapper():
             # swap in optim states
             for key, state in self.optimizer_states[group_idx][partition_idx].items():
                 if p not in self.optimizer.state:
+                    # create param key for optim state
                     self.optimizer.state[p] = {}
                 self.optimizer.state[p][key] = state.to('cuda')
 
     def swap_out_partition(self, partition_idx):
-        # note: p.data has been updated w.r.t. p.grad/optim.states need to copy back
         # swap out optim states
         for group_idx, group in enumerate(self.optimizer.param_groups):
             # leave param partition on cuda for now
