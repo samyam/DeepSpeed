@@ -226,7 +226,11 @@ class ParallelTransformerLayer(MegatronModule):
 
 #### Allocating Massive Megatron-LM Models
 
+<<<<<<< HEAD
 We make two further changes to model initialization in order to support models
+=======
+We make two further changes to model initalization in order to support models
+>>>>>>> [squash] Staging zero infinity v1 (#168)
 that exceed *local* system memory, but not *total* system memory.
 
 1. Allocate the model in a memory-scalable fashion. The model parameters will

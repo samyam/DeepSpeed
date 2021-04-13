@@ -22,12 +22,115 @@ Getting Started
 If you are new to DeepSpeed, check out our `Getting Started <https://www.deepspeed.ai/getting-started/>`_ page.
 
 Once you are training with DeepSpeed, enabling ZeRO-3 Offload is as simple as enabling it
+<<<<<<< HEAD
+=======
 in your DeepSpeed configuration! Below are a few examples of ZeRO-3 configurations. Please see
 our `config guide <https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training>`_
 for a complete list of options for configuration and performance tuning.
 
 .. note::
         ZeRO-3 Offload works best with our heavily optimized
+        :class:`deepspeed.ops.adam.DeepSpeedCPUAdam` optimizer. We recommend using
+        our `optimizer config <https://www.deepspeed.ai/docs/config-json/#optimizer-parameters>`_
+        to instruct :meth:`deepspeed.initialize` to build the optimizer for you.
+
+
+Example ZeRO-3 Offload Configurations
+=====================================
+
+#. Use ZeRO to partition the optimizer states (stage 1), gradients (stage 2),
+   and parameters (stage 3).
+
+    .. code-block:: python
+        :emphasize-lines: 3
+
+        {
+            "zero_optimization": {
+                "stage": 3,
+                "overlap_comm": true
+            },
+            "fp16": {
+                "enabled": true
+            },
+            "optimizer": {
+                "type": "AdamW",
+                "params": {
+                "lr": 0.001,
+                "betas": [
+                    0.8,
+                    0.999
+                ],
+                "eps": 1e-8,
+                "weight_decay": 3e-7
+                }
+            },
+            ...
+        }
+
+
+#. Additionally offload the optimizer states and computations to the CPU.
+
+    .. code-block:: python
+        :emphasize-lines:  4
+
+        {
+            "zero_optimization": {
+                "stage": 3,
+                "cpu_offload": true,
+                "overlap_comm": true
+            },
+            ...
+        }
+
+
+#. Save even more memory by offloading parameters to the CPU memory.
+
+    .. code-block:: python
+        :emphasize-lines:  5
+
+        {
+            "zero_optimization": {
+                "stage": 3,
+                "cpu_offload": true,
+                "cpu_offload_params": true,
+                "overlap_comm": true
+            },
+            ...
+        }
+
+
+The Zero Redundancy Optimizer (ZeRO) removes the memory redundancies across
+data-parallel processes by partitioning the three model states (optimizer
+states, gradients, and parameters) across data-parallel processes instead of
+replicating them. By doing this, it boosts memory efficiency compared to
+classic data-parallelism while retaining its computational granularity and
+communication efficiency.
+
+ZeRO-Offload further increases memory efficiency by offloading the
+optimizer's states and computations to the CPU. The model parameters can also
+be offloaded for even more memory savings!
+
+For more information on our algorithms, please see our papers on `ZeRO
+<https://arxiv.org/abs/1910.02054>`_ and `ZeRO-Offload
+<https://arxiv.org/abs/2101.06840>`_.
+
+Getting Started
+---------------
+
+If you are new to DeepSpeed, check out our `Getting Started <https://www.deepspeed.ai/getting-started/>`_ page.
+
+Once you are training with DeepSpeed, enabling ZeRO-3 offload is as simple as enabling it
+>>>>>>> [squash] Staging zero infinity v1 (#168)
+in your DeepSpeed configuration! Below are a few examples of ZeRO-3 configurations. Please see
+our `config guide <https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training>`_
+for a complete list of options for configuration and performance tuning.
+
+.. note::
+<<<<<<< HEAD
+        ZeRO-3 Offload works best with our heavily optimized
+=======
+        ZeRO-Offload requires our heavily optimized
+>>>>>>> [squash] Staging zero infinity v1 (#168)
         :class:`deepspeed.ops.adam.DeepSpeedCPUAdam` optimizer. We recommend using
         our `optimizer config <https://www.deepspeed.ai/docs/config-json/#optimizer-parameters>`_
         to instruct :meth:`deepspeed.initialize` to build the optimizer for you.
@@ -126,8 +229,6 @@ you can simply allocate your model in our context:
         model = MyLargeModel()
 
 
-
-.. autoclass:: deepspeed.zero.Init
     :members:
 
 
@@ -178,6 +279,28 @@ The tensor ``embeddings.weight`` is used in both ``embeddings.forward()`` and
 because it is used in the training loop outside of its owning module's
 forward pass. DeepSpeed will coordinate external parameters if they are
 registered prior to the first forward pass.
+
+Consider the following pattern common in language models such as GPT:
+
+.. code-block:: python
+
+    class LanguageModel(torch.nn.Module):
+        ...
+        def forward(self, inputs):
+            embeds = self.embeddings(inputs)
+            ...
+            logits = compute_logits(output, self.embeddings.weight)
+            ...
+
+
+The tensor ``embeddings.weight`` is used in both ``embeddings.forward()`` and
+``compute_logits()``. We call ``embeddings.weight`` an *external* parameter
+because it is used in the training loop outside of its owning module's
+forward pass. DeepSpeed will coordinate external parameters if they are
+registered prior to the first forward pass.
+
+.. note::
+    Most models should not need to manually register parameters.
 
 .. autofunction:: deepspeed.zero.register_external_parameter
 
