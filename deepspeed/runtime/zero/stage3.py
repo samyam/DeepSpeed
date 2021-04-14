@@ -301,7 +301,6 @@ class PrefetchCoordinator(object):
                     start_step,
                     end_step,
                     trace)
-
                 break
 
         self.reuse_numel_for_step_id[sub_module_step_id] = reuse_distance_in_numel
@@ -535,7 +534,7 @@ class PartitionedParameterCoordinator(object):
     def _keep_for_later(self, sub_module):
         if not self.prefetch_coordinator.trace_completed:
             return False
-        if self.max_reuse_distance == 0:
+        if self.max_reuse_distance_in_numel == 0:
             return False
         reuse_distance_in_numel = self.prefetch_coordinator.get_reuse_distance_in_numel(
             sub_module)
@@ -1198,7 +1197,8 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
                 see_memory_usage(f"After Flattening param group {i}", force=False)
 
                 #create a pinned memory to be used for swapping out params to NVME after optimizer step
-                if self.fp16_partitioned_groups_flat[-1] is None and self.param_group_fp16_flat_reuse_buffer is None:
+                if self.fp16_partitioned_groups_flat[
+                        -1] is None and self.param_group_fp16_flat_reuse_buffer is None:
                     self.param_group_fp16_flat_reuse_buffer = torch.empty(
                         max(self.fp16_partitioned_groups_flat_numel),
                         dtype=torch.half,
@@ -1410,7 +1410,7 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
         #likely one of them should be enough but just to be safe
         self.module.register_forward_hook(_end_of_forward_hook)
         self.module.register_forward_pre_hook(_pre_forward_hook)
-        
+
         # Add top todule to stack trace
         global FWD_MODULE_STACK
         FWD_MODULE_STACK.append(self.module)
