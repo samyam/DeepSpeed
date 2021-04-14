@@ -13,13 +13,13 @@ import itertools
 import torch
 from torch.distributed.distributed_c10d import _get_global_rank
 
-from deepspeed.runtime.zero.linear import LinearModuleForZeroStage3, LinearFunctionForZeroStage3
-from deepspeed.runtime.utils import see_memory_usage
+from .linear import LinearModuleForZeroStage3, LinearFunctionForZeroStage3
+from ..utils import see_memory_usage
 from deepspeed.utils import log_dist, init_distributed
 
-from deepspeed.runtime.swap_tensor.partitioned_param_swapper import AsyncPartitionedParameterSwapper, PartitionedParamStatus
-from deepspeed.runtime.config import DeepSpeedConfig
-from deepspeed.runtime.swap_tensor.constants import SWAP_FP16_PARAMS
+from ..swap_tensor.partitioned_param_swapper import AsyncPartitionedParameterSwapper, PartitionedParamStatus
+from ..config import DeepSpeedConfig
+from ..swap_tensor.constants import SWAP_FP16_PARAMS
 
 param_count = 0
 
@@ -284,7 +284,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 torch.nn.functional.linear with an implementation that allows
                 DeepSpeed to partition parameters. Defaults to ``True``.
             remote_device (string, optional): The device to store model
-                weights. Passing ``"cpu"`` will create the model in CPU
+                weights e.g., cpu, nvme. Passing ``"cpu"`` will create the model in CPU
                 memory. The model may still be moved to GPU if
                 ``cpu_offload_param`` is ``False`` in the config provided to
                 :meth:`deepspeed.initialize`. Defaults to the local GPU.

@@ -9,7 +9,7 @@ import os
 import torch
 
 from deepspeed.utils.logging import logger
-from deepspeed.ops.aio import aio_handle
+from deepspeed.ops.aio import AsyncIOBuilder
 
 from deepspeed.runtime.swap_tensor.constants import *
 from deepspeed.runtime.swap_tensor.utils import swap_in_tensors, swap_out_tensors, print_object, \
@@ -76,17 +76,18 @@ class PipelinedOptimizerSwapper(OptimizerSwapper):
                              dtype,
                              timers)
 
-        self.write_aio_handle = aio_handle(aio_config[AIO_BLOCK_SIZE],
-                                           aio_config[AIO_QUEUE_DEPTH],
-                                           aio_config[AIO_SINGLE_SUBMIT],
-                                           aio_config[AIO_OVERLAP_EVENTS],
-                                           aio_config[AIO_THREAD_COUNT])
+        aio_op = AsyncIOBuilder().load()
+        self.write_aio_handle = aio_op.aio_handle(aio_config[AIO_BLOCK_SIZE],
+                                                  aio_config[AIO_QUEUE_DEPTH],
+                                                  aio_config[AIO_SINGLE_SUBMIT],
+                                                  aio_config[AIO_OVERLAP_EVENTS],
+                                                  aio_config[AIO_THREAD_COUNT])
 
-        self.read_aio_handle = aio_handle(aio_config[AIO_BLOCK_SIZE],
-                                          aio_config[AIO_QUEUE_DEPTH],
-                                          aio_config[AIO_SINGLE_SUBMIT],
-                                          aio_config[AIO_OVERLAP_EVENTS],
-                                          aio_config[AIO_THREAD_COUNT])
+        self.read_aio_handle = aio_op.aio_handle(aio_config[AIO_BLOCK_SIZE],
+                                                 aio_config[AIO_QUEUE_DEPTH],
+                                                 aio_config[AIO_SINGLE_SUBMIT],
+                                                 aio_config[AIO_OVERLAP_EVENTS],
+                                                 aio_config[AIO_THREAD_COUNT])
 
         # Overlap gradient swap out
         self.gradient_swapper = AsyncTensorSwapper(aio_handle=self.write_aio_handle,

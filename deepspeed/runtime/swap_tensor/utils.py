@@ -7,7 +7,6 @@ Functionality of swapping tensors to/from (NVMe) storage devices.
 
 import os
 import torch
-from deepspeed.ops.aio import aio_handle
 from deepspeed.utils.logging import logger
 
 from deepspeed.runtime.swap_tensor.constants import AIO_BLOCK_SIZE, AIO_QUEUE_DEPTH, \

@@ -9,7 +9,7 @@ import os
 import torch
 
 from deepspeed.utils.logging import logger
-from deepspeed.ops.aio import aio_handle
+from deepspeed.ops.aio import AsyncIOBuilder
 
 from deepspeed.runtime.swap_tensor.constants import AIO_BLOCK_SIZE, AIO_QUEUE_DEPTH, \
     AIO_THREAD_COUNT, AIO_SINGLE_SUBMIT, AIO_OVERLAP_EVENTS
@@ -45,11 +45,12 @@ class PartitionedOptimizerSwapper(OptimizerSwapper):
                              dtype,
                              timers)
 
-        self.aio_handle = aio_handle(aio_config[AIO_BLOCK_SIZE],
-                                     aio_config[AIO_QUEUE_DEPTH],
-                                     aio_config[AIO_SINGLE_SUBMIT],
-                                     aio_config[AIO_OVERLAP_EVENTS],
-                                     aio_config[AIO_THREAD_COUNT])
+        aio_op = AsyncIOBuilder.load()
+        self.aio_handle = aio_op.aio_handle(aio_config[AIO_BLOCK_SIZE],
+                                            aio_config[AIO_QUEUE_DEPTH],
+                                            aio_config[AIO_SINGLE_SUBMIT],
+                                            aio_config[AIO_OVERLAP_EVENTS],
+                                            aio_config[AIO_THREAD_COUNT])
 
         # Overlap swapping out
         self.gradient_swapper = AsyncTensorSwapper(aio_handle=self.aio_handle,
