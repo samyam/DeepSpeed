@@ -340,14 +340,14 @@ class DeepSpeedEngine(Module):
     def zero_overlap_comm(self):
         return self._config.zero_config.overlap_comm
 
+    def zero_offload_optimizer(self):
+        return self._config.zero_config.offload_optimizer
+
+    def zero_offload_param(self):
+        return self._config.zero_config.offload_param
+
     def zero_cpu_offload(self):
-        return self._config.zero_config.cpu_offload
-
-    def zero_cpu_offload_params(self):
-        return self._config.zero_config.cpu_offload_params
-
-    def zero_cpu_offload_use_pin_memory(self):
-        return self._config.zero_config.cpu_offload_use_pin_memory
+        return self._config.zero_config.offload_optimizer is not None
 
     def zero_sub_group_size(self):
         return self._config.zero_config.sub_group_size
@@ -800,15 +800,13 @@ class DeepSpeedEngine(Module):
                 dp_process_group=self.data_parallel_group,
                 reduce_scatter=self.zero_reduce_scatter(),
                 overlap_comm=self.zero_overlap_comm(),
-                cpu_offload_optimizer_state=self.zero_cpu_offload(),
-                cpu_offload_params=self.zero_cpu_offload_params(),
-                cpu_offload_use_pin_memory=self.zero_cpu_offload_use_pin_memory(),
+                offload_optimizer_config=self.zero_offload_optimizer(),
+                offload_param_config=self.zero_offload_param(),
                 sub_group_size=self.zero_sub_group_size(),
                 mpu=self.mpu,
                 postscale_gradients=self.postscale_gradients(),
                 gradient_predivide_factor=self.gradient_predivide_factor(),
                 gradient_accumulation_steps=self.gradient_accumulation_steps(),
-                swap_tensor_config=self.swap_tensor_config(),
                 aio_config=self.aio_config())
 
         else:

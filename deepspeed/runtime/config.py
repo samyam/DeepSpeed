@@ -25,7 +25,6 @@ from ..elasticity.constants import ELASTICITY, IGNORE_NON_ELASTIC_BATCH_INFO, \
 from ..profiling.config import DeepSpeedFlopsProfilerConfig
 
 from .swap_tensor.aio_config import get_aio_config
-from .swap_tensor.swap_config import get_swap_tensor_config
 
 TENSOR_CORE_ALIGN_SIZE = 8
 
@@ -660,7 +659,6 @@ class DeepSpeedConfig(object):
         self.checkpoint_tag_validation_fail = validation_mode == ValidationMode.FAIL
 
         self.aio_config = get_aio_config(param_dict)
-        self.swap_tensor_config = get_swap_tensor_config(param_dict)
 
     def _batch_assertion(self):
 

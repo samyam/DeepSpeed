@@ -11,6 +11,7 @@ import torch
 from deepspeed.utils.logging import logger
 from deepspeed.ops.aio import AsyncIOBuilder
 
+from deepspeed.runtime.zero.offload_constants import *
 from deepspeed.runtime.swap_tensor.constants import *
 from deepspeed.runtime.swap_tensor.utils import swap_in_tensors, swap_out_tensors, print_object, \
     MIN_AIO_BYTES, AIO_ALIGNED_BYTES
@@ -94,8 +95,8 @@ class PipelinedOptimizerSwapper(OptimizerSwapper):
                                                    numel_alignment=self.numel_alignment,
                                                    timers=self.timers)
 
-        self.async_swap_in = swap_config[SWAP_PIPELINE_READ]
-        self.async_swap_out = swap_config[SWAP_PIPELINE_WRITE]
+        self.async_swap_in = swap_config[OFFLOAD_OPTIMIZER_PIPELINE_READ]
+        self.async_swap_out = swap_config[OFFLOAD_OPTIMIZER_PIPELINE_WRITE]
 
         self.swap_ops = {
             SYNC_SWAP_IN: None,

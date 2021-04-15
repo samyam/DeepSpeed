@@ -11,8 +11,7 @@ import torch
 from deepspeed.utils.logging import logger
 from deepspeed.ops.aio import AsyncIOBuilder
 
-from deepspeed.runtime.swap_tensor.constants import AIO_BLOCK_SIZE, AIO_QUEUE_DEPTH, \
-    AIO_THREAD_COUNT, AIO_SINGLE_SUBMIT, AIO_OVERLAP_EVENTS
+from deepspeed.runtime.swap_tensor.constants import *
 from deepspeed.runtime.swap_tensor.utils import swap_in_tensors, swap_out_tensors, print_object, \
     MIN_AIO_BYTES, AIO_ALIGNED_BYTES, get_sized_buffers, get_sized_buffer
 from deepspeed.runtime.swap_tensor.async_swapper import AsyncTensorSwapper

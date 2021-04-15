@@ -14,12 +14,13 @@ import torch
 from torch.distributed.distributed_c10d import _get_global_rank
 
 from .linear import LinearModuleForZeroStage3, LinearFunctionForZeroStage3
+from .offload_constants import *
+
 from ..utils import see_memory_usage
 from deepspeed.utils import log_dist, init_distributed
 
 from ..swap_tensor.partitioned_param_swapper import AsyncPartitionedParameterSwapper, PartitionedParamStatus
 from ..config import DeepSpeedConfig
-from ..swap_tensor.constants import SWAP_FP16_PARAMS
 
 param_count = 0
 
@@ -390,10 +391,11 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         #Remote device is the device where parameter partiitons are stored
         #It can be same as local_device or it could be CPU or NVMe.
         self.remote_device = self.local_device if remote_device is None else remote_device
-        self.pin_memory = pin_memory if (self.remote_device == 'cpu') else False
+        self.pin_memory = pin_memory if (
+            self.remote_device == OFFLOAD_CPU_DEVICE) else False
 
         # Enable fp16 param swapping to NVMe
-        if self.remote_device == 'nvme':
+        if self.remote_device == OFFLOAD_NVME_DEVICE:
             _ds_config = DeepSpeedConfig(deepspeed_config)
             self.param_swapper = AsyncPartitionedParameterSwapper(_ds_config)
         else:
@@ -409,11 +411,21 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 param.partition()
 
     def _validate_remote_device(self, remote_device, ds_config):
-        if remote_device in [None, 'cpu'] and ds_config is not None:
+        if ds_config is not None:
             _ds_config = DeepSpeedConfig(ds_config)
-            if _ds_config.swap_tensor_config is not None:
-                assert _ds_config.swap_tensor_config.get(SWAP_FP16_PARAMS, False) is False, \
-                f"{SWAP_FP16_PARAMS} in DeepSpeed Config cannot be True if Remote device is {remote_device}"
+            if remote_device in [None, OFFLOAD_CPU_DEVICE]:
+                if _ds_config.zero_config.offload_param is not None:
+                    offload_param_device = _ds_config.zero_config.offload_param[
+                        OFFLOAD_PARAM_DEVICE]
+                    assert offload_param_device != OFFLOAD_NVME_DEVICE, \
+                    f"{OFFLOAD_PARAM_DEVICE} in DeepSpeed Config cannot be {offload_param_device} if remote device is {remote_device}."
+
+            if remote_device == OFFLOAD_NVME_DEVICE:
+                assert _ds_config.zero_config.offload_param is not None, \
+                f'{OFFLOAD_PARAM} must be defined in DeepSpeed Config if remote device is {OFFLOAD_NVME_DEVICE}.'
+
+                assert _ds_config.zero_config.offload_param[OFFLOAD_PARAM_NVME_PATH] is not None, \
+                f'{OFFLOAD_PARAM_NVME_PATH} in DeepSpeed Config cannot be None if remote device is {OFFLOAD_NVME_DEVICE}'
 
     def _post_init_method(self, module):
         #see_memory_usage(f"Before converting parmas in {module.__class__.__name__}", force=False)
@@ -547,10 +559,10 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         swap_in_flight = []
         for param in params:
             if param.ds_tensor.status == PartitionedParamStatus.NOT_AVAILABLE:
-                assert param.ds_tensor.final_location == 'nvme' and param.ds_status == ZeroParamStatus.NOT_AVAILABLE
+                assert param.ds_tensor.final_location == OFFLOAD_NVME_DEVICE and param.ds_status == ZeroParamStatus.NOT_AVAILABLE
                 swap_in_list.append(param)
             if param.ds_tensor.status == PartitionedParamStatus.INFLIGHT:
-                assert param.ds_tensor.final_location == 'nvme' and param.ds_status == ZeroParamStatus.NOT_AVAILABLE
+                assert param.ds_tensor.final_location == OFFLOAD_NVME_DEVICE and param.ds_status == ZeroParamStatus.NOT_AVAILABLE
                 swap_in_flight.append(param)
         if len(swap_in_list) > 0:
             swap_in_list[0].nvme_swapper.swap_in(swap_in_list, async_op=False)
@@ -627,7 +639,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 see_memory_usage(f'After partitioning param {param.ds_id} {param.shape}',
                                  force=False)
 
-                if param.ds_tensor.final_location == 'nvme':
+                if param.ds_tensor.final_location == OFFLOAD_NVME_DEVICE:
                     print_rank_0(
                         f"Param {param.ds_id} partition released since it exists in nvme",
                         force=False)
@@ -640,9 +652,9 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
             if param.ds_tensor is None:
                 final_location = None
-                if self.remote_device == 'nvme' and self.param_swapper.swappable_tensor(
+                if self.remote_device == OFFLOAD_NVME_DEVICE and self.param_swapper.swappable_tensor(
                         numel=partition_size):
-                    final_location = 'nvme'
+                    final_location = OFFLOAD_NVME_DEVICE
                     buffer = self.param_swapper.get_buffer(param, partition_size)
                     partitioned_tensor = torch.zeros(1,
                                                      dtype=param.dtype,
@@ -656,8 +668,9 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     partitioned_tensor = torch.zeros(
                         partition_size,
                         dtype=param.dtype,
-                        device='cpu'
-                        if self.remote_device == 'nvme' else self.remote_device)
+                        device=OFFLOAD_CPU_DEVICE
+                        if self.remote_device == OFFLOAD_NVME_DEVICE else
+                        self.remote_device)
                     if self.pin_memory:
                         partitioned_tensor = partitioned_tensor.pin_memory()
 
@@ -707,7 +720,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             see_memory_usage(f'After partitioning param {param.ds_id} {param.shape}',
                              force=False)
 
-            if param.ds_tensor.final_location == 'nvme':
+            if param.ds_tensor.final_location == OFFLOAD_NVME_DEVICE:
                 self.param_swapper.swap_out_and_release([param])
                 print_rank_0(
                     f"ID {param.ds_id} Offloaded to nvme offload and buffers released.")

@@ -9,6 +9,7 @@ import os
 import torch
 
 from deepspeed.utils.logging import logger
+from deepspeed.runtime.zero.offload_constants import *
 from deepspeed.runtime.swap_tensor.constants import *
 from deepspeed.runtime.swap_tensor.utils import swap_in_tensors, swap_out_tensors, \
     MIN_AIO_BYTES, AIO_ALIGNED_BYTES, get_sized_buffers, get_sized_buffer
@@ -142,7 +143,7 @@ class OptimizerSwapper(object):
         self.dtype = dtype
         self.swap_buffer_manager = SwapBufferManager(
             num_elems=largest_numel,
-            count=swap_config[SWAP_OPTIMIZER_BUFFER_COUNT],
+            count=swap_config[OFFLOAD_OPTIMIZER_BUFFER_COUNT],
             dtype=dtype)
 
         # Read/Write alignment for each thread during Intra-request parallelism

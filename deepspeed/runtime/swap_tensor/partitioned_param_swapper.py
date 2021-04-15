@@ -14,6 +14,7 @@ from deepspeed.utils.logging import logger
 from deepspeed.ops.aio import AsyncIOBuilder
 from .constants import *
 from .utils import swap_in_tensors, swap_out_tensors, MIN_AIO_BYTES, print_object
+from ..zero.offload_constants import *
 
 
 def print_rank_0(message, debug=False, force=False):
@@ -74,16 +75,15 @@ class AsyncPartitionedParameterSwapper(object):
         return len(self.available_buffer_ids)
 
     def _configure_aio(self, ds_config):
-        self.swap_config = ds_config.swap_tensor_config
-
-        self.swap_folder = os.path.join(self.swap_config[SWAP_FOLDER],
+        self.swap_config = ds_config.zero_config.offload_param
+        self.swap_folder = os.path.join(self.swap_config[OFFLOAD_PARAM_NVME_PATH],
                                         'zero_stage_3',
                                         'fp16params',
                                         f'rank{dist.get_rank()}')
         os.makedirs(self.swap_folder, exist_ok=True)
 
-        self.elements_per_buffer = self.swap_config[SWAP_FP16_PARAMS_BUFFER_SIZE]
-        self.param_buffer_count = self.swap_config[SWAP_FP16_PARAMS_BUFFER_COUNT]
+        self.elements_per_buffer = self.swap_config[OFFLOAD_PARAM_BUFFER_SIZE]
+        self.param_buffer_count = self.swap_config[OFFLOAD_PARAM_BUFFER_COUNT]
 
         self.available_buffer_ids = [i for i in range(self.param_buffer_count)]
         self.reserved_buffer_ids = []
