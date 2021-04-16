@@ -45,7 +45,8 @@ OFFLOAD_OPTIMIZER_FORMAT = '''
   "buffer_count": 4,
   "pin_memory": [true|false],
   "pipeline_read": false,
-  "pipeline_write": false
+  "pipeline_write": false,
+  "fast_init": false
 }
 '''
 OFFLOAD_OPTIMIZER = "offload_optimizer"
@@ -62,3 +63,5 @@ OFFLOAD_OPTIMIZER_PIPELINE_READ_DEFAULT = False
 OFFLOAD_OPTIMIZER_PIPELINE_WRITE = "pipeline_write"
 OFFLOAD_OPTIMIZER_PIPELINE_WRITE_DEFAULT = False
 OFFLOAD_OPTIMIZER_PIPELINE = "pipeline"
+OFFLOAD_OPTIMIZER_FAST_INIT = "fast_init"
+OFFLOAD_OPTIMIZER_FAST_INIT_DEFAULT = False

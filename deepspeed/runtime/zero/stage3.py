@@ -693,12 +693,15 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
 
         self.offload_optimizer = False
         self.offload_optimizer_pin_memory = False
+        self.offload_optimizer_fast_init = False
         if offload_optimizer_config is not None:
             self.offload_optimizer = True
             self.offload_optimizer_pin_memory = offload_optimizer_config[
                 OFFLOAD_OPTIMIZER_PIN_MEMORY]
             self.swap_optimizer = offload_optimizer_config[
                 OFFLOAD_OPTIMIZER_DEVICE] == OFFLOAD_NVME_DEVICE
+            self.offload_optimizer_fast_init = offload_optimizer_config[
+                OFFLOAD_OPTIMIZER_FAST_INIT]
 
         ###################### offload param setup ##################################
         self.offload_param = False
@@ -1274,11 +1277,10 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
                 nvme_memory_usage += (fp32_element_size * num_elements)
                 num_swappable_partitions += 1
 
-                # TODO: Explore perf benefits of bulk nvme writes such as in the else branch
                 if self.params_in_nvme_and_cpu and tensor is None:
                     num_swap_from_nvme_partitions += 1
                     swap_from_nvme_memory_usage += (fp32_element_size * num_elements)
-                    if True:
+                    if self.offload_optimizer_fast_init:
                         sub_group_partitions = self._get_sub_group_partitions(i)
                         nvme_fp16_partitions_info.append(sub_group_partitions)
                         nvme_fp16_num_elems.append(num_elements)
@@ -3040,6 +3042,11 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
                 "ZeRO-3 does not yet support elastic checkpointing, please disable for now."
             )
 
+        if self.swap_optimizer or self.params_in_nvme_and_cpu:
+            raise NotImplementedError(
+                "ZeRO-3 does not yet support checkpointing with NVMe offloading, please disable for now."
+            )
+
         return self._rigid_state_dict()
 
 
@@ -3182,10 +3189,15 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
             raise NotImplementedError(
                 "ZeRO-3 does not yet support elastic checkpointing, please disable for now."
             )
-        else:
-            self._rigid_load_state_dict(
-                state_dict_list[dist.get_rank(group=self.dp_process_group)],
-                load_optimizer_states=load_optimizer_states)
+
+        if self.swap_optimizer or self.params_in_nvme_and_cpu:
+            raise NotImplementedError(
+                "ZeRO-3 does not yet support checkpointing with NVMe offloading, please disable for now."
+            )
+
+        self._rigid_load_state_dict(
+            state_dict_list[dist.get_rank(group=self.dp_process_group)],
+            load_optimizer_states=load_optimizer_states)
 
         if len(self.persistent_parameters) > 0:
             self.persistent_parameters[0].partition(self.persistent_parameters)
