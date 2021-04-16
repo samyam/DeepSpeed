@@ -17,13 +17,11 @@ from torch.autograd import Variable
 
 from deepspeed.utils.logging import logger
 from deepspeed.runtime.fp16.loss_scaler import LossScaler, DynamicLossScaler
-from deepspeed.utils.logging import logger
 from deepspeed.runtime.utils import see_memory_usage, is_model_parallel_parameter
 from deepspeed.runtime.zero.partition_parameters import *
 from deepspeed.runtime.zero.partition_parameters import _init_external_params
 from deepspeed.runtime.zero.constants import ZERO_OPTIMIZATION_WEIGHTS
 from deepspeed.ops.adam import DeepSpeedCPUAdam
-from deepspeed.utils.logging import logger
 from deepspeed.runtime.zero.offload_constants import *
 from deepspeed.runtime.swap_tensor.partitioned_param_swapper import PartitionedParamStatus
 from deepspeed.runtime.swap_tensor.partitioned_optimizer_swapper import PartitionedOptimizerSwapper
@@ -1597,8 +1595,10 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
         fp32_param = self.fp32_partitioned_groups_flat[sub_group_id]
         fp16_param = self.fp16_partitioned_groups_flat[sub_group_id]
         self.optimizer.param_groups[param_group_id]['params'] = [fp32_param]
+
         self.optimizer.step()
         self.optimizer.param_groups[param_group_id]['params'] = []
+
         if fp16_param is not None:
             fp16_param.data.copy_(fp32_param.data)
         else:
@@ -1675,11 +1675,13 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
             if swappable_optimizer_subgroup:
                 self._optimizer_states_and_gradient_swap_in(i, timer_names)
 
-            if self.offload_optimizer_pin_memory and not swappable_optimizer_subgroup:
-                self.fp32_partitioned_groups_flat[i].grad = torch.zeros(
-                    num_elements,
-                    dtype=gradient_dtype,
-                    device=self.device).pin_memory()
+            if self.offload_optimizer and not swappable_optimizer_subgroup:
+                subgroup_gradient_buffer = torch.zeros(num_elements,
+                                                       dtype=gradient_dtype,
+                                                       device=self.device)
+                if self.offload_optimizer_pin_memory:
+                    subgroup_gradient_buffer = subgroup_gradient_buffer.pin_memory()
+                self.fp32_partitioned_groups_flat[i].grad = subgroup_gradient_buffer
             else:
                 self.fp32_partitioned_groups_flat[i].grad = gradient_buffer.narrow(
                     0,
@@ -2117,10 +2119,6 @@ class FP16_DeepSpeedZeroOptimizer_Stage3(object):
         for param in self.previous_reduced_grads:
 
             [i, dest_offset, num_elements] = self.grad_position[self.get_param_id(param)]
-
-            # self.debug_fp16_grads[i][self.get_param_id(param)] = (
-            #     float(param.data.float().norm(2)),
-            #     float(param.grad.data.float().norm(2)))
 
             if self.offload_optimizer:
                 param.partition_gradients(partition_buffers=self.temp_grad_gpu_buffer)
