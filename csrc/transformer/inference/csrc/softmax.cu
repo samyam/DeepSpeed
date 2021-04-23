@@ -12,8 +12,6 @@
 #define attn_warps 4
 #define MAX_ATTN_REG 4  // MAX Head Size 256
 
-#define SCALE_HALF true
-
 #define minus_infinity -1 * std::numeric_limits<float>::infinity()
 
 void CheckCudaErrorAux(const char* file, unsigned line)
@@ -276,8 +274,6 @@ void launch_attn_softmax_v2(T* vals,
         throw std::runtime_error(
             "Unsupport Seq_Length! Check the restriction of the max_threads and "
             "max_thread_iterations!");
-
-    CUDA_CHECK_ERROR();
 }
 
 template void launch_attn_softmax_v2(float* vals,
@@ -306,7 +302,7 @@ __device__ void attn_score(__half* shared_soft,
                            __half* key_merged,
                            bool merging,
                            float norm_factor,
-                           int head_size,
+                           int inp_size,
                            int total_count,
                            int num_seq,
                            int hidden,
@@ -321,48 +317,39 @@ __device__ void attn_score(__half* shared_soft,
 
     __half2 queries_low[MAX_ATTN_REG];
     __half2 queries_high[MAX_ATTN_REG];
+
     float2* query_cast = reinterpret_cast<float2*>(query);
     float2* key_cast = reinterpret_cast<float2*>(key);
+
     float2* key_merged_cast;
     if (merging) key_merged_cast = reinterpret_cast<float2*>(key_merged);
     float2* new_key_cast;
     if (new_key) new_key_cast = reinterpret_cast<float2*>(new_key);
+
     __half2 norm_factor_h = __float2half2_rn(norm_factor);
-    int inp_size = head_size >> 1;
+
     int input_offset = (blockIdx.x * warp_num + wid);
 
     if (input_offset < total_count) {
-        input_offset =
+        query_cast +=
             (input_offset % num_seq) * (hidden >> 1) + (input_offset / num_seq) * inp_size;
 
         int row = lane;
         int p = 0;
 
         while (row < inp_size) {
-            float2 querie = query_cast[input_offset + row];
+            float2 querie = query_cast[row];
 
             __half2* query_value = reinterpret_cast<__half2*>(&querie);
-            if (SCALE_HALF) {
-                queries_low[p] = query_value[0] / norm_factor_h;
-                queries_high[p] = query_value[1] / norm_factor_h;
-            } else {
-                float2 query_value_f[2];
-                query_value_f[0] = __half22float2(query_value[0]);
-                query_value_f[1] = __half22float2(query_value[1]);
-                query_value_f[0].x /= norm_factor;
-                query_value_f[1].x /= norm_factor;
-                query_value_f[0].y /= norm_factor;
-                query_value_f[1].y /= norm_factor;
-                queries_low[p] = __float22half2_rn(query_value_f[0]);
-                queries_high[p] = __float22half2_rn(query_value_f[1]);
-            }
+
+            queries_low[p] = query_value[0] * norm_factor_h;
+            queries_high[p] = query_value[1] * norm_factor_h;
+
             p++;
             row += WARP_SIZE;
         }
 
-        int seq_key = (blockIdx.x * warp_num + wid) / num_seq;
-
-        int unique_id = (blockIdx.x * warp_num + wid) % num_seq;
+        int seq_key = input_offset / num_seq;
 
         key_cast += (seq_key * inp_size);
         key_merged_cast += (seq_key * inp_size);
@@ -384,23 +371,12 @@ __device__ void attn_score(__half* shared_soft,
                         int p = 0;
                         while (row < inp_size) {
                             float2 key_value_reg = key_cast[row];
-                            if (merging && unique_id == 0) key_merged_cast[row] = key_value_reg;
+                            if (merging && (input_offset % num_seq) == 0)
+                                key_merged_cast[row] = key_value_reg;
                             __half2* key_value = reinterpret_cast<__half2*>(&key_value_reg);
-                            if (SCALE_HALF) {
-                                key_value[0] /= norm_factor_h;
-                                key_value[1] /= norm_factor_h;
-                            } else {
-                                float2 key_value_f[2];
-                                key_value_f[0] = __half22float2(key_value[0]);
-                                key_value_f[1] = __half22float2(key_value[1]);
 
-                                key_value_f[0].x /= norm_factor;
-                                key_value_f[1].x /= norm_factor;
-                                key_value_f[0].y /= norm_factor;
-                                key_value_f[1].y /= norm_factor;
-                                key_value[0] = __float22half2_rn(key_value_f[0]);
-                                key_value[1] = __float22half2_rn(key_value_f[1]);
-                            }
+                            key_value[0] *= norm_factor_h;
+                            key_value[1] *= norm_factor_h;
 
                             float2 mul[2];
                             mul[0] = __half22float2(queries_low[p] * key_value[0]);
@@ -410,7 +386,8 @@ __device__ void attn_score(__half* shared_soft,
                             p++;
                         }
                         key_cast += (hidden >> 1);
-                        if (merging && unique_id == 0) key_merged_cast += (hidden >> 1);
+                        if (merging && (input_offset % num_seq) == 0)
+                            key_merged_cast += (hidden >> 1);
 #pragma unroll
                         for (int w = 1; w < WARP_SIZE; w *= 2)
                             scores[k] += g.shfl_xor(scores[k], w);
@@ -431,34 +408,23 @@ __device__ void attn_score(__half* shared_soft,
                 }
             }
             if (new_key) {
-                new_key_cast += (((blockIdx.x * warp_num + wid) / num_seq) * inp_size);
+                new_key_cast += ((input_offset / num_seq) * inp_size);
                 if (merging) {
                     key_merged_cast = reinterpret_cast<float2*>(key_merged);
-                    key_merged_cast += ((blockIdx.x * warp_num + wid) / num_seq) * inp_size +
-                                       ((hidden >> 1) * value_length);
+                    key_merged_cast +=
+                        (input_offset / num_seq) * inp_size + ((hidden >> 1) * value_length);
                 }
                 row = lane;
                 int p = 0;
                 float score = 0;
                 while (row < inp_size) {
                     float2 new_key_data = new_key_cast[row];
-                    if (merging && unique_id == 0) key_merged_cast[row] = new_key_data;
+                    if (merging && (input_offset % num_seq) == 0)
+                        key_merged_cast[row] = new_key_data;
                     __half2* key_value = reinterpret_cast<__half2*>(&new_key_data);
-                    if (SCALE_HALF) {
-                        key_value[0] /= norm_factor_h;
-                        key_value[1] /= norm_factor_h;
-                    } else {
-                        float2 key_value_f[2];
-                        key_value_f[0] = __half22float2(key_value[0]);
-                        key_value_f[1] = __half22float2(key_value[1]);
 
-                        key_value_f[0].x /= norm_factor;
-                        key_value_f[1].x /= norm_factor;
-                        key_value_f[0].y /= norm_factor;
-                        key_value_f[1].y /= norm_factor;
-                        key_value[0] = __float22half2_rn(key_value_f[0]);
-                        key_value[1] = __float22half2_rn(key_value_f[1]);
-                    }
+                    key_value[0] *= norm_factor_h;
+                    key_value[1] *= norm_factor_h;
 
                     float2 mul[2];
                     mul[0] = __half22float2(queries_low[p] * key_value[0]);
@@ -489,7 +455,7 @@ __device__ void attn_score(float* shared_soft,
                            float* key_merged,
                            bool merging,
                            float norm_factor,
-                           int head_size,
+                           int inp_size,
                            int total_count,
                            int num_seq,
                            int hidden,
@@ -510,7 +476,6 @@ __device__ void attn_score(float* shared_soft,
     float2* new_key_cast;
     if (new_key) new_key_cast = reinterpret_cast<float2*>(new_key);
 
-    int inp_size = head_size;
     int input_offset = (blockIdx.x * warp_num + wid);
 
     if (input_offset < total_count) {
@@ -522,8 +487,8 @@ __device__ void attn_score(float* shared_soft,
         while (row < inp_size) {
             query_value[p] = query_cast[row];
 
-            query_value[p].x /= norm_factor;
-            query_value[p].y /= norm_factor;
+            query_value[p].x *= norm_factor;
+            query_value[p].y *= norm_factor;
 
             p++;
             row += WARP_SIZE;
@@ -555,8 +520,8 @@ __device__ void attn_score(float* shared_soft,
                             float2 key_value = key_cast[row];
                             if (merging && unique_id == 0) key_merged_cast[row] = key_value;
 
-                            key_value.x /= norm_factor;
-                            key_value.y /= norm_factor;
+                            key_value.x *= norm_factor;
+                            key_value.y *= norm_factor;
 
                             float2 mul;
                             mul.x = query_value[p].x * key_value.x;
@@ -598,8 +563,8 @@ __device__ void attn_score(float* shared_soft,
                     float2 key_value = new_key_cast[row];
                     if (merging && unique_id == 0) key_merged_cast[row] = key_value;
 
-                    key_value.x /= norm_factor;
-                    key_value.y /= norm_factor;
+                    key_value.x *= norm_factor;
+                    key_value.y *= norm_factor;
 
                     float2 mul;
                     mul.x = query_value[p].x * key_value.x;
@@ -944,11 +909,11 @@ __device__ void attn_context(__half2* shared_soft1,
     __half2* merged_value_cast;
     if (merging) merged_value_cast = reinterpret_cast<__half2*>(merged_value);
 
-    int offset = (blockIdx.x * warp_num + wid) / num_seq;
+    int col_id = (blockIdx.x * warp_num + wid);
+    int offset = col_id / num_seq;
     int value_size = total_count / num_seq;
-    int unique_id = (blockIdx.x * warp_num + wid) % num_seq;
+
     if (offset < value_size) {
-        __half2 vals_f[4];
         int wid_iter = 0;
         float2 sum[attn_warps << 1];
 #pragma unroll
@@ -956,98 +921,93 @@ __device__ void attn_context(__half2* shared_soft1,
             sum[p].x = 0;
             sum[p].y = 0;
         }
-        offset = (offset * head_size);
-        int merge_offset = offset + lane;
+        offset = (offset * head_size) + lane;
+
+        int merge_offset = offset;
         while (wid_iter < value_length) {
-            {
-                __half2 val_h[2];
-                val_h[0] = shared_soft1[wid * 1024 + (wid_iter >> 1)];
-                val_h[1] = shared_soft1[wid * 1024 + (wid_iter >> 1) + 1];
+            __half2 val_h[2];
+            __half* inp_data[2];
 
-                __half* inp_data[2];
-                inp_data[0] = reinterpret_cast<__half*>(&val_h[0]);
-                inp_data[1] = reinterpret_cast<__half*>(&val_h[1]);
+            val_h[0] = shared_soft1[wid * 1024 + (wid_iter >> 1)];
+            val_h[1] = shared_soft1[wid * 1024 + (wid_iter >> 1) + 1];
 
-                vals_f[0] = __halves2half2(inp_data[0][0], inp_data[0][0]);
-                vals_f[1] = __halves2half2(inp_data[0][1], inp_data[0][1]);
-                vals_f[2] = __halves2half2(inp_data[1][0], inp_data[1][0]);
-                vals_f[3] = __halves2half2(inp_data[1][1], inp_data[1][1]);
-            }
+            inp_data[0] = reinterpret_cast<__half*>(&val_h[0]);
+            inp_data[1] = reinterpret_cast<__half*>(&val_h[1]);
+
             int row = lane;
-            int offset1 = lane + offset;
-            int merge_offset1 = merge_offset;
             int iter = 0;
+            value_cast += offset;
+            merged_value_cast += merge_offset;
             while (row < head_size) {
                 __half2 weight_h[4];
-                weight_h[0] = value_cast[offset1];
-                weight_h[1] = ((wid_iter + 1) < value_length ? value_cast[hidden + offset1]
-                                                             : __float2half2_rn(0.f));
-                weight_h[2] = ((wid_iter + 2) < value_length ? value_cast[(hidden << 1) + offset1]
-                                                             : __float2half2_rn(0.f));
-                weight_h[3] =
-                    ((wid_iter + 3) < value_length ? value_cast[((hidden << 1) + hidden) + offset1]
-                                                   : __float2half2_rn(0.f));
-                if (merging && unique_id == 0) {
-                    merged_value_cast[merge_offset1] = weight_h[0];
-                    if ((wid_iter + 1) < value_length)
-                        merged_value_cast[hidden + merge_offset1] = weight_h[1];
-                    if ((wid_iter + 2) < value_length)
-                        merged_value_cast[(hidden << 1) + merge_offset1] = weight_h[2];
-                    if ((wid_iter + 3) < value_length)
-                        merged_value_cast[((hidden << 1) + hidden) + merge_offset1] = weight_h[3];
+#pragma unroll
+                for (int f = 0; f < 4; f++)
+                    weight_h[f] = (wid_iter + f) < value_length ? value_cast[f * hidden]
+                                                                : __float2half2_rn(0.f);
+
+                if (merging && (col_id % num_seq) == 0) {
+#pragma unroll
+                    for (int f = 0; f < 4; f++)
+                        if ((wid_iter + f) < value_length)
+                            merged_value_cast[f * hidden] = weight_h[f];
                 }
                 {
                     float2 mul[4];
-                    mul[0] = __half22float2(vals_f[0] * weight_h[0]);
-                    mul[1] = __half22float2(vals_f[1] * weight_h[1]);
-                    mul[2] = __half22float2(vals_f[2] * weight_h[2]);
-                    mul[3] = __half22float2(vals_f[3] * weight_h[3]);
+                    mul[0] = __half22float2(weight_h[0] *
+                                            __halves2half2(inp_data[0][0], inp_data[0][0]));
+                    mul[1] = __half22float2(weight_h[1] *
+                                            __halves2half2(inp_data[0][1], inp_data[0][1]));
+                    mul[2] = __half22float2(weight_h[2] *
+                                            __halves2half2(inp_data[1][0], inp_data[1][0]));
+                    mul[3] = __half22float2(weight_h[3] *
+                                            __halves2half2(inp_data[1][1], inp_data[1][1]));
 
                     sum[iter].x += mul[0].x + mul[1].x + mul[2].x + mul[3].x;
                     sum[iter].y += mul[0].y + mul[1].y + mul[2].y + mul[3].y;
                 }
                 row += (WARP_SIZE);
-                offset1 += (WARP_SIZE);
-                merge_offset1 += WARP_SIZE;
+                value_cast += (WARP_SIZE);
+                merged_value_cast += WARP_SIZE;
                 iter++;
             }
+            value_cast = reinterpret_cast<__half2*>(prev_value);
+            if (merging) merged_value_cast = reinterpret_cast<__half2*>(merged_value);
             wid_iter += 4;
-            offset += (hidden * 4);
-            merge_offset += (hidden * 4);
+            offset += (hidden << 2);
+            merge_offset += (hidden << 2);
         }
 
         if (new_value) {
             int row = lane;
-            int merge_offset = ((blockIdx.x * warp_num + wid) / num_seq) * head_size + lane +
-                               (value_length * hidden);
+            int merge_offset = (col_id / num_seq) * head_size + lane + (value_length * hidden);
             __half2 val_h;
             val_h = shared_soft1[wid * 1024 + (value_length >> 1)];
             __half* inp_data;
             inp_data = reinterpret_cast<__half*>(&val_h);
-            vals_f[0] = __halves2half2(inp_data[value_length % 2], inp_data[value_length % 2]);
+            __half2 vals_f = __halves2half2(inp_data[value_length % 2], inp_data[value_length % 2]);
             int p = 0;
-            int offset1 = ((blockIdx.x * warp_num + wid) / num_seq) * (head_size) + lane;
+            int offset1 = (col_id / num_seq) * (head_size) + lane;
             while (row < head_size) {
                 __half2 new_value_data = new_value_cast[offset1];
-                float2 mul = __half22float2(vals_f[0] * new_value_data);
+                float2 mul = __half22float2(vals_f * new_value_data);
                 sum[p].x += mul.x;
                 sum[p].y += mul.y;
-                if (merging && unique_id == 0) merged_value_cast[merge_offset] = new_value_data;
+                if (merging && (col_id % num_seq) == 0)
+                    merged_value_cast[merge_offset] = new_value_data;
                 row += WARP_SIZE;
                 offset1 += WARP_SIZE;
                 merge_offset += WARP_SIZE;
                 p++;
             }
         }
-        int offset1 = ((blockIdx.x * warp_num + wid));
-        if (offset1 < total_count) {
+        if (col_id < total_count) {
             int p = 0;
             int row = lane;
-            offset1 = offset1 * head_size + lane;
+            col_id = col_id * head_size + lane;
             while (row < head_size) {
-                output_cast[offset1] = __float22half2_rn(sum[p]);
+                output_cast[col_id] = __float22half2_rn(sum[p]);
                 row += WARP_SIZE;
-                offset1 += WARP_SIZE;
+                col_id += WARP_SIZE;
                 p++;
             }
         }
@@ -1217,7 +1177,7 @@ __global__ void attn_softmax_context(__half* output,
                        key_merged,
                        merging,
                        norm_factor,
-                       head_size,
+                       (head_size >> 1),
                        total_count,
                        num_seq,
                        hidden,
@@ -1483,8 +1443,6 @@ void launch_attn_softmax_context(T* out,
         throw std::runtime_error(
             "Unsupport Seq_Length! Check the restriction of the max_threads and "
             "max_thread_iterations!");
-
-    CUDA_CHECK_ERROR();
 }
 
 template void launch_attn_softmax_context(float* out,

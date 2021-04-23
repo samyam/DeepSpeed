@@ -179,7 +179,7 @@ class DeepSpeedSelfAttentionFunction(Function):
                                                    past_value.type_as(value_layer),
                                                    value_layer,
                                                    num_attention_heads_per_partition,
-                                                   norm_factor,
+                                                   1 / norm_factor,
                                                    True)
             else:
                 if mixed_query.shape[1] >= 32:
@@ -216,7 +216,7 @@ class DeepSpeedSelfAttentionFunction(Function):
                          value_layer,
                          torch.empty(1),
                          num_attention_heads_per_partition,
-                         norm_factor,
+                         1 / norm_factor,
                          True)
             # Transpose Context
             context_layer = _transpose_for_context(context_layer)

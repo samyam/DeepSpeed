@@ -21,7 +21,7 @@ __op_builders__ = [
     SparseAttnBuilder(),
     TransformerBuilder(),
     StochasticTransformerBuilder(),
-    AsyncIOBuilder()
+    AsyncIOBuilder(),
     InferenceBuilder(),
     UtilsBuilder()
 ]
