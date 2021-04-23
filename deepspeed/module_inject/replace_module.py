@@ -1,90 +1,144 @@
 import copy
 import torch
 import deepspeed
+import deepspeed.ops.transformer as transformer_inference
+from .replace_policy import HFBertLayerPolicy, MegatronLayerPolicy
 
 
 def replace_transformer_layer(orig_layer_impl,
                               model,
-                              micro_batch_size,
-                              bert_config,
+                              policy=HFBertLayerPolicy,
+                              micro_batch_size=-1,
+                              bert_config=None,
                               seed=-1,
+                              hidden_size=-1,
+                              num_attention_heads=-1,
+                              mp_size=1,
+                              mp_group=None,
                               preln=True,
                               fp16=True,
+                              local_rank=-1,
                               training=True,
-                              huggingface=False,
-                              local_rank=-1):
+                              quantize=False,
+                              encoder_decoder=False,
+                              quantize_settings=None):
     """ Replace bert-style transformer layers with DeepSpeed's transformer layer
     Arguments:
         orig_layer_impl (torch.nn.Module): the original transformer layer implementation to look for,
             e.g., transformers.modeling_bert.BertLayer.
         model (torch.nn.Module): user's nn.module representing their model
+        policy: shows the policy for mapping from the orig_layer_impl to transformer parameters
         micro_batch_size (int): micro batch size per gpu used during training/eval
         bert_config (dict): model config containing hidden size, attention heads, etc.
         seed (int): random seed value
+        max_seq_length (int): max sequence length for training
+        hidden_size (int): hidden dimension
+        num_attention_heads (int): numebr of attention heads
+        mp_size (int): model_parallelism degree
+        mp_group : model_parallel gropu initialized on the modeling side
         preln (bool): does the original layer implementation do pre or post layer norm?
         fp16 (bool): fp16 or fp32
-        Training (bool): select between training (True) or inference (False) mode
-        huggingface (bool): huggingface implementation is unique (supports both encoder/decoder modes)
+        local_rank (int): GPU rank (optional),
+        training (bool): specifying whether kernel-injection is done for training/inference (set to false for inference-mode injection)
+
+        Note: For Bert kind of models, we inject based on the DeepSpeed-Example models, if not setting huggingface flag.
 
     Returns:
         Updated nn.module with replaced transformer layers
     """
-    def replace_fn(child):
-        transformer_config = deepspeed.DeepSpeedTransformerConfig(
-            batch_size=micro_batch_size,
-            hidden_size=bert_config.hidden_size,
-            heads=bert_config.num_attention_heads,
-            attn_dropout_ratio=bert_config.attention_probs_dropout_prob,
-            hidden_dropout_ratio=bert_config.hidden_dropout_prob,
-            num_hidden_layers=bert_config.num_hidden_layers,
-            initializer_range=bert_config.initializer_range,
-            layer_norm_eps=bert_config.layer_norm_eps,
-            seed=seed,
-            fp16=fp16,
-            pre_layer_norm=preln,
-            huggingface=huggingface,
-            local_rank=local_rank,
-            training=training)
-        new_module = deepspeed.DeepSpeedTransformerLayer(transformer_config)
-
-        # copy relevant state from child -> new module
-        qw = child.attention.self.query.weight
-        qb = child.attention.self.query.bias
-        kw = child.attention.self.key.weight
-        kb = child.attention.self.key.bias
-        vw = child.attention.self.value.weight
-        vb = child.attention.self.value.bias
-
-        qkvw = torch.cat((qw, kw, vw), 0)
-        qkvb = torch.cat((qb, kb, vb), 0)
-
-        #qw.data,kw.data,vw.data = torch.chunk(qkvw, 3, axis=0)
-        #qb.data,kb.data,vb.data = torch.chunk(qkvb, 3, axis=0)
-
-        new_module.attn_qkvw.data = qkvw
-        new_module.attn_qkvb.data = qkvb
-        new_module.attn_ow.data = child.attention.output.dense.weight
-        new_module.attn_ob.data = child.attention.output.dense.bias
-        if preln:
-            attention_layernorm = child.PostAttentionLayerNorm
+    def replace_with_policy(new_module, child, policy_cls, inference=False, preln=True):
+        if policy_cls is HFBertLayerPolicy:
+            policy = policy_cls(child, inference=inference, preln=preln)
         else:
-            attention_layernorm = child.attention.output.LayerNorm
-        new_module.attn_nw.data = attention_layernorm.weight
-        new_module.attn_nb.data = attention_layernorm.bias
-        if preln:
-            intermediate_ff = child.intermediate.dense_act
+            policy = policy_cls(child, inference=inference)
+
+        qkvw, qkvb, dense_w, dense_b = policy.attention()
+        _h4h_w, _h4h_b, _4hh_w, _4hh_b = policy.mlp()
+        attn_nw, attn_nb, input_nw, input_nb = policy.layerNorm()
+
+        if inference:
+            new_module.attention.attn_qkvw.data = qkvw
+            new_module.attention.attn_qkvb.data = qkvb
+            new_module.attention.attn_ow.data = dense_w
+            new_module.attention.attn_ob.data = dense_b
+
+            new_module.mlp.inter_w.data = _h4h_w
+            new_module.mlp.inter_b.data = _h4h_b
+            new_module.mlp.output_w.data = _4hh_w
+            new_module.mlp.output_b.data = _4hh_b
+
+            new_module.mlp.attn_nw.data = attn_nw
+            new_module.mlp.attn_nb.data = attn_nb
+            new_module.norm_w.data = input_nw
+            new_module.norm_b.data = input_nb
         else:
-            intermediate_ff = child.intermediate.dense
-        new_module.inter_w.data = intermediate_ff.weight
-        new_module.inter_b.data = intermediate_ff.bias
-        new_module.output_w.data = child.output.dense.weight
-        new_module.output_b.data = child.output.dense.bias
-        if preln:
-            transformer_layernorm = child.PreAttentionLayerNorm
+            new_module.attn_qkvw.data = qkvw
+            new_module.attn_qkvb.data = qkvb
+            new_module.attn_ow.data = dense_w
+            new_module.attn_ob.data = dense_b
+
+            new_module.attn_nw.data = attn_nw
+            new_module.attn_nb.data = attn_nb
+            new_module.norm_w.data = input_nw
+            new_module.norm_b.data = input_nb
+
+            new_module.inter_w.data = _h4h_w
+            new_module.inter_b.data = _h4h_b
+            new_module.output_w.data = _4hh_w
+            new_module.output_b.data = _4hh_b
+
+    def replace_fn(child, layer_id=0):
+        if training:
+            transformer_config = deepspeed.DeepSpeedTransformerConfig(
+                batch_size=micro_batch_size,
+                hidden_size=bert_config.hidden_size,
+                heads=bert_config.num_attention_heads,
+                attn_dropout_ratio=bert_config.attention_probs_dropout_prob,
+                hidden_dropout_ratio=bert_config.hidden_dropout_prob,
+                num_hidden_layers=bert_config.num_hidden_layers,
+                initializer_range=bert_config.initializer_range,
+                seed=seed,
+                fp16=fp16,
+                pre_layer_norm=preln,
+                huggingface=encoder_decoder,
+                local_rank=local_rank,
+                training=training)
+            new_module = deepspeed.DeepSpeedTransformerLayer(transformer_config)
+
+            # copy relevant state from child -> new module
+            replace_with_policy(new_module, child, policy, preln=preln)
+
         else:
-            transformer_layernorm = child.output.LayerNorm
-        new_module.norm_w.data = transformer_layernorm.weight
-        new_module.norm_b.data = transformer_layernorm.bias
+            transformer_config = transformer_inference.DeepSpeedInferenceConfig(
+                hidden_size=hidden_size,
+                heads=num_attention_heads,
+                fp16=fp16,
+                pre_layer_norm=preln,
+                mp_size=mp_size,
+                q_int8=quantize,
+                encoder_decoder=encoder_decoder)
+
+            if quantize and quantize_settings is not None:
+                (quantization_scales,
+                 merge_count,
+                 mlp_extra_grouping,
+                 quantize_groups) = quantize_settings
+                new_module = transformer_inference.DeepSpeedTransformerInference(
+                    transformer_config,
+                    mp_group=mp_group,
+                    quantize_scales=quantization_scales[layer_id],
+                    quantize_groups=quantize_groups,
+                    merge_count=merge_count,
+                    mlp_extra_grouping=mlp_extra_grouping)
+            else:
+                new_module = transformer_inference.DeepSpeedTransformerInference(
+                    transformer_config,
+                    mp_group=mp_group,
+                )
+
+            # copy relevant state from child -> new module
+            replace_with_policy(new_module, child, policy, inference=True, preln=preln)
+
         return new_module
 
     return replace_module(model=model, orig_class=orig_layer_impl, replace_fn=replace_fn)
@@ -170,10 +224,11 @@ def replace_module(model, orig_class, replace_fn):
         A modified ``model``.
     """
     policy = {orig_class: replace_fn}
-    return _replace_module(model, policy)
+    replaced_module, _ = _replace_module(model, policy)
+    return replaced_module
 
 
-def _replace_module(model, policies):
+def _replace_module(model, policies, layer_id=0):
     """ Traverse model's children recursively and apply any transformations in ``policies``.
     Arguments:
         model (torch.nn.Module): model to augment
@@ -185,9 +240,10 @@ def _replace_module(model, policies):
     for name, child in model.named_children():
         if child.__class__ in policies:
             orig = repr(child)
-            setattr(model, name, policies[child.__class__](child))
+            setattr(model, name, policies[child.__class__](child, layer_id))
             new = getattr(model, name)
+            layer_id += 1
         else:
-            _replace_module(child, policies)
+            _, layer_id = _replace_module(child, policies, layer_id=layer_id)
 
-    return model
+    return model, layer_id

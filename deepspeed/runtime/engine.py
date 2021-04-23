@@ -886,7 +886,7 @@ class DeepSpeedEngine(Module):
         self.warn_unscaled_loss = True
         self.module.train(False)
 
-    def _scale_loss(self, prescaled_loss):
+    def _scale_loss_by_gas(self, prescaled_loss):
         if isinstance(prescaled_loss, torch.Tensor):
             scaled_loss = prescaled_loss / self.gradient_accumulation_steps()
         elif isinstance(prescaled_loss, tuple) or isinstance(prescaled_loss, list):
@@ -993,7 +993,7 @@ class DeepSpeedEngine(Module):
 
         # scale loss w.r.t. gradient accumulation if needed
         if self.gradient_accumulation_steps() > 1:
-            loss = self._scale_loss(loss.float())
+            loss = self._scale_loss_by_gas(loss.float())
 
         # Log training Loss
         if self.tensorboard_enabled():
@@ -1411,6 +1411,15 @@ class DeepSpeedEngine(Module):
                 'mp_rank_{:02d}'.format(mp_rank) + '_model_states.pt')
         return ckpt_name
 
+    def _get_all_ckpt_names(self, checkpoints_path, tag):
+        # It is required that (checkpoints_path, tag) are consistent among all ranks.
+        ckpt_dir = os.path.join(checkpoints_path, str(tag))
+        ckpt_file_pattern = ckpt_dir + '/mp_rank_*_model_states.pt'
+        import glob
+        ckpt_files = glob.glob(ckpt_file_pattern)
+        ckpt_files.sort()
+        return ckpt_files
+
     def load_checkpoint(self,
                         load_dir,
                         tag=None,
@@ -1463,29 +1472,32 @@ class DeepSpeedEngine(Module):
                          load_optimizer_states=True,
                          load_lr_scheduler_states=True):
 
-        load_path = self._get_ckpt_name(load_dir, tag)
+        from deepspeed.runtime.state_dict_factory import SDLoaderFactory
+        ckpt_list = self._get_all_ckpt_names(load_dir, tag)
+        sd_loader = SDLoaderFactory.get_sd_loader(ckpt_list)
 
-        if not os.path.exists(load_path):
-            logger.warn(
-                'Client provided checkpoint load path: {} does not exist ... skip checkpoint load'
-                .format(load_path))
+        is_pipe_parallel = isinstance(self.module, PipelineModule)
+
+        mp_rank = 0 if self.mpu is None else self.mpu.get_model_parallel_rank()
+        load_path, checkpoint, _ = sd_loader.load(self.mp_world_size, mp_rank, is_pipe_parallel=is_pipe_parallel)
+
+        if checkpoint is None:
             return None, None
 
-        logger.info(f'rank: {self.global_rank} loading checkpoint: {load_path}')
-        checkpoint = torch.load(load_path, map_location=lambda storage, loc: storage)
-
-        if isinstance(self.module, PipelineModule):
+        if is_pipe_parallel:
             # Pipeline parallelism uses this to load its own checkpoint files.
             self._curr_ckpt_path = os.path.join(load_dir, tag)
 
         self.load_module_state_dict(state_dict=checkpoint['module'],
                                     strict=load_module_strict)
-        if self.optimizer is not None and not self.zero_optimization():
+
+        if load_optimizer_states and self.optimizer is not None and not self.zero_optimization(
+        ):
             if self.fp16_enabled():
                 self.optimizer.load_state_dict(
                     checkpoint['optimizer'],
                     load_optimizer_states=load_optimizer_states)
-            elif load_optimizer_states:
+            else:
                 self.optimizer.load_state_dict(checkpoint['optimizer'])
 
         if load_lr_scheduler_states and self.lr_scheduler is not None:
