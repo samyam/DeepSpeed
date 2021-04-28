@@ -14,6 +14,8 @@ from .runtime.lr_schedules import add_tuning_arguments
 from .runtime.config import DeepSpeedConfig, DeepSpeedConfigError
 from .runtime.activation_checkpointing import checkpointing
 from .ops.transformer import DeepSpeedTransformerLayer, DeepSpeedTransformerConfig
+from .module_inject import replace_transformer_layer
+
 from .utils import log_dist
 from .utils.distributed import init_distributed
 

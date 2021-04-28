@@ -4,6 +4,7 @@ Copyright 2019 The Microsoft DeepSpeed Team
 
 import os
 import stat
+import math
 import torch
 import warnings
 import hashlib
@@ -38,6 +39,7 @@ import deepspeed.runtime.lr_schedules as lr_schedules
 from deepspeed.utils import logger, log_dist, init_distributed
 from deepspeed.utils.timer import ThroughputTimer, SynchronizedWallClockTimer
 from deepspeed.runtime.progressive_layer_drop import ProgressiveLayerDrop
+from deepspeed.runtime.eigenvalue import Eigenvalue
 
 from .pipe.module import PipelineModule
 from .utils import ensure_directory_exists
@@ -132,6 +134,9 @@ class DeepSpeedEngine(Module):
         self.loaded_checkpoint_dp_world_size = None
         self.enable_backward_allreduce = True
         self.progressive_layer_drop = None
+        self.eigenvalue = None
+        self.block_eigenvalue = None
+        self.gas_boundary_ctr = 0
         self.dist_backend = "nccl"
 
         if dist_init_required is None:
@@ -200,6 +205,9 @@ class DeepSpeedEngine(Module):
         self.save_zero_checkpoint = False
         self._configure_checkpointing(dist_init_required)
 
+        if self.eigenvalue_enabled():
+            self.eigenvalue = self._configure_eigenvalue()
+
         if self.pld_enabled():
             self.progressive_layer_drop = self._configure_progressive_layer_drop()
 
@@ -246,6 +254,30 @@ class DeepSpeedEngine(Module):
 
     def pld_gamma(self):
         return self.pld_params()[PLD_GAMMA]
+
+    def eigenvalue_enabled(self):
+        return self._config.eigenvalue_enabled
+
+    def eigenvalue_verbose(self):
+        return self._config.eigenvalue_verbose
+
+    def eigenvalue_max_iter(self):
+        return self._config.eigenvalue_max_iter
+
+    def eigenvalue_tol(self):
+        return self._config.eigenvalue_tol
+
+    def eigenvalue_stability(self):
+        return self._config.eigenvalue_stability
+
+    def eigenvalue_gas_boundary_resolution(self):
+        return self._config.eigenvalue_gas_boundary_resolution
+
+    def eigenvalue_layer_name(self):
+        return self._config.eigenvalue_layer_name
+
+    def eigenvalue_layer_num(self):
+        return self._config.eigenvalue_layer_num
 
     def tensorboard_enabled(self):
         return self._config.tensorboard_enabled
@@ -328,6 +360,20 @@ class DeepSpeedEngine(Module):
     def scheduler_params(self):
         return self._config.scheduler_params
 
+    def quantize_training(self):
+        return self._config.quantize_training_enabled, \
+            self._config.quantize_target_bits, \
+            self._config.quantize_start_bits, \
+            self._config.quantize_period, \
+            self._config.quantize_offset, \
+            self._config.quantize_groups, \
+            self._config.fp16_mixed_quantize, \
+            self._config.quantize_change_rate, \
+            self._config.quantize_type, \
+            self._config.quantize_rounding, \
+            self._config.quantize_verbose, \
+            self._config.use_quantizer_kernel
+
     def zero_optimization(self):
         return self._config.zero_enabled
 
@@ -390,6 +436,9 @@ class DeepSpeedEngine(Module):
 
     def zero_gather_fp16_weights_on_model_save(self):
         return self._config.zero_config.gather_fp16_weights_on_model_save
+
+    def zero_find_unused_parameters(self):
+        return self._config.zero_config.find_unused_parameters
 
     def fp16_enabled(self):
         return self._config.fp16_enabled
@@ -650,6 +699,8 @@ class DeepSpeedEngine(Module):
         log_dist('DeepSpeed Final Optimizer = {}'.format(self.optimizer_name()),
                  ranks=[0])
 
+        self.quantizer = self._configure_quantization()
+
     def _configure_basic_optimizer(self, model_parameters):
         optimizer_parameters = self.optimizer_params()
         # print(optimizer_parameters.keys())
@@ -706,6 +757,38 @@ class DeepSpeedEngine(Module):
             torch_optimizer = getattr(torch.optim, self.optimizer_name())
             optimizer = torch_optimizer(model_parameters, **optimizer_parameters)
         return optimizer
+
+    def _configure_quantization(self):
+        quantize_enabled, \
+            q_target_bits, \
+            q_start_bits, \
+            q_period, \
+            q_offset, \
+            q_groups, \
+            q_mixed_fp16, \
+            q_change_ratio, \
+            q_type, \
+            q_rounding, \
+            q_verbose, \
+            use_quantizer_kernel = self.quantize_training()
+        quantizer = None
+        if quantize_enabled:
+            from deepspeed.runtime.quantize import Quantizer
+            quantizer = Quantizer(
+                q_target_bits,
+                q_start_bits,
+                q_period,
+                q_offset,
+                q_groups,
+                q_mixed_fp16,
+                q_change_ratio,
+                q_type,
+                q_rounding,
+                q_verbose,
+                self.eigenvalue_enabled(),
+                use_quantizer_kernel,
+                self.eigenvalue_layer_num() if self.eigenvalue_enabled() else 0)
+        return quantizer
 
     def _configure_fp16_optimizer(self, optimizer):
         initial_dynamic_scale = self.initial_dynamic_scale()
@@ -789,7 +872,8 @@ class DeepSpeedEngine(Module):
                 mpu=self.mpu,
                 postscale_gradients=self.postscale_gradients(),
                 gradient_predivide_factor=self.gradient_predivide_factor(),
-                gradient_accumulation_steps=self.gradient_accumulation_steps())
+                gradient_accumulation_steps=self.gradient_accumulation_steps(),
+                find_unused_parameters=self.zero_find_unused_parameters())
         elif zero_stage == ZERO_OPTIMIZATION_WEIGHTS:
             print("Initializing ZeRO Stage 3") if dist.get_rank() == 0 else None
             from deepspeed.runtime.zero.stage3 import FP16_DeepSpeedZeroOptimizer_Stage3
@@ -823,6 +907,18 @@ class DeepSpeedEngine(Module):
             raise NotImplementedError("ZeRO stage {} not implemented".format(zero_stage))
 
         return optimizer
+
+    def _configure_eigenvalue(self):
+        eigenvalue = Eigenvalue(
+            verbose=self.eigenvalue_verbose(),
+            max_iter=self.eigenvalue_max_iter(),
+            tol=self.eigenvalue_tol(),
+            stability=self.eigenvalue_stability(),
+            gas_boundary_resolution=self.eigenvalue_gas_boundary_resolution(),
+            layer_name=self.eigenvalue_layer_name(),
+            layer_num=self.eigenvalue_layer_num())
+
+        return eigenvalue
 
     def _configure_progressive_layer_drop(self):
         pld = ProgressiveLayerDrop(theta=self.pld_theta(), gamma=self.pld_gamma())
@@ -1032,9 +1128,15 @@ class DeepSpeedEngine(Module):
                                 delay_unscale=delay_unscale) as scaled_loss:
                 scaled_loss.backward()
         elif self.fp16_enabled():
-            self.optimizer.backward(loss)
+            if self.eigenvalue_enabled():
+                self.optimizer.backward(loss, create_graph=True, retain_graph=True)
+            else:
+                self.optimizer.backward(loss)
         else:
-            loss.backward()
+            if self.eigenvalue_enabled():
+                loss.backward(create_graph=True, retain_graph=True)
+            else:
+                loss.backward()
 
         if self.wall_clock_breakdown():
             self.timers('backward_inner').stop()
@@ -1081,7 +1183,7 @@ class DeepSpeedEngine(Module):
         torch.nn.utils.clip_grad_norm_(parameters=self.module.parameters(),
                                        max_norm=self.gradient_clipping())
 
-    def _take_model_step(self, lr_kwargs):
+    def _take_model_step(self, lr_kwargs, block_eigenvalue={}):
         if self.gradient_clipping() > 0.0:
             if not self.fp16_enabled() and not self.amp_enabled():
                 self.clip_fp32_gradients()
@@ -1091,8 +1193,17 @@ class DeepSpeedEngine(Module):
                 master_params = amp.master_params(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(parameters=master_params,
                                                max_norm=self.gradient_clipping())
+
         self.optimizer.step()
 
+        # Quantize the updated parameter if there no overflow
+        if self.quantizer:
+            self.quantizer.quantize(
+                (self.optimizer.fp16_groups
+                 if self.fp16_enabled() else self.optimizer.param_groups),
+                (self.optimizer.overflow if self.fp16_enabled() else False),
+                self.eigenvalue_enabled(),
+                block_eigenvalue)
         #zero grad in basic optimizer could be unreliable and may not exhibit
         #the behaviour that we want
         if not self.zero_optimization() and not self.fp16_enabled(
@@ -1134,10 +1245,26 @@ class DeepSpeedEngine(Module):
 
         # Update the model when we reach gradient accumulation boundaries
         if self.is_gradient_accumulation_boundary():
+            self.gas_boundary_ctr += 1
+
+            if self.eigenvalue_enabled() and (
+                    self.gas_boundary_ctr % self.eigenvalue_gas_boundary_resolution() ==
+                    0) and self.quantizer.any_precision_switch():
+                log_dist(f'computing eigenvalue...', ranks=[0])
+                self.block_eigenvalue = self.eigenvalue.compute_eigenvalue(
+                    self.module,
+                    self.device,
+                    self.optimizer.cur_scale)
+
             if self.progressive_layer_drop:
                 self.progressive_layer_drop.update_state(self.global_steps)
 
-            self._take_model_step(lr_kwargs)
+            if self.eigenvalue_enabled(
+            ) and not self.gas_boundary_ctr % self.eigenvalue_gas_boundary_resolution(
+            ) and self.quantizer.any_precision_switch():
+                self._take_model_step(lr_kwargs, self.block_eigenvalue)
+            else:
+                self._take_model_step(lr_kwargs)
 
         self.tput_timer.stop(report_progress)
 
@@ -1154,6 +1281,18 @@ class DeepSpeedEngine(Module):
                         self.summary_events.append((f'Train/Samples/loss_scale',
                                                     self.optimizer.cur_scale,
                                                     self.global_samples))
+
+                    if self.eigenvalue_enabled(
+                    ) and not self.gas_boundary_ctr % self.eigenvalue_gas_boundary_resolution(
+                    ):
+                        ev_values = self.block_eigenvalue.values()
+                        for i in range(len(ev_values)):
+                            self.summary_writer.add_scalar(
+                                f'Train/Eigenvalues/ModelBlockParam_{i}',
+                                self.ev_values[i][0],
+                                self.global_samples)
+                            self.summary_writer.flush()
+
                     for event in self.summary_events:  # write_summary_events
                         self.summary_writer.add_scalar(event[0], event[1], event[2])
                     self.summary_writer.flush()

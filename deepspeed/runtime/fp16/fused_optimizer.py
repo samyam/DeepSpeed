@@ -133,7 +133,7 @@ class FP16_Optimizer(object):
                         p.grad.detach_()
                         p.grad.zero_()
 
-    def step_fused_adam(self, closure=None):
+    def step_fused_adam(self, closure=None, block_eigenvalue={}):
         """
         Not supporting closure.
         """
@@ -197,7 +197,7 @@ class FP16_Optimizer(object):
         """
 
         if self.fused_adam_legacy:
-            return self.step_fused_adam()
+            return self.step_fused_adam(block_eigenvalue=block_eigenvalue)
 
         COMPUTE_NORM = "compute_norm"
         OVERFLOW_CHECK = 'overflow_check'
@@ -264,11 +264,13 @@ class FP16_Optimizer(object):
             group.grad = None
 
         self.start_timers([UPDATE_FP16])
+
         for i in range(len(self.fp16_groups)):
             updated_params = _unflatten_dense_tensors(self.fp32_groups_flat[i],
                                                       self.fp16_groups[i])
             for p, q in zip(self.fp16_groups[i], updated_params):
                 p.data.copy_(q.data)
+
         self.stop_timers([UPDATE_FP16])
 
         self.log_timers(STEP_TIMERS)
@@ -295,7 +297,7 @@ class FP16_Optimizer(object):
 
         return combined_scale
 
-    def backward(self, loss):
+    def backward(self, loss, create_graph=False, retain_graph=False):
         """
         :attr:`backward` performs the following steps:
 
@@ -304,7 +306,8 @@ class FP16_Optimizer(object):
         3. scaled_loss.backward(), which accumulates scaled gradients into the ``.grad`` attributes of the model's fp16 leaves
         """
         scaled_loss = (loss.float()) * self.cur_scale
-        scaled_loss.backward()
+
+        scaled_loss.backward(create_graph=create_graph, retain_graph=retain_graph)
 
     def _update_scale(self, skip):
         if self.dynamic_loss_scale:
