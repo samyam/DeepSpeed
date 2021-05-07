@@ -7,7 +7,7 @@ DeepSpeed-Inference introduces several features to efficiently serve PyTorch-bas
 
 In this tutorial, we will go through the steps for enabling the inference through DeepSpeed by using the high-performance inference kernel for different datatypes, FP32, FP16 and INT8. Please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/) for more information on how to quantize a model.
 
-DeepSpeed provides an agile inference-mode for the PyTorch-based models, meaning that we don’t require any change on the modeling side such as exporting the model or creating a different checkpoint from your trained checkpoints. To run the inference on multi-GPU, we can configure the model on parallel GPUs based on the optimization criteria. We use model-parallelism to reduce the inference latency, since it partitions the inference workload across GPUs and each execute independently, until the results are merged through reduction operations. For the reduction operations, we use PyTorch distributed all-reduce.
+DeepSpeed provides an agile inference-mode for the PyTorch-based models, meaning that we don’t require any change on the modeling side such as exporting the model or creating a different checkpoint from your trained checkpoints. To run the inference on multi-GPU, we can configure the model on parallel GPUs based on the optimization criteria. We use model-parallelism to reduce the inference latency, since it partitions the inference workload across GPUs and each execute independently, until the results are merged through reduction operations. For the reduction operations, we use PyTorch distributed all-reduce. For more information on the DeepSpeed inference optimization, please refer to our [blog-post](TODO:add the link).
 
 In DeepSpeed, we have a seamless pipeline to get the model into serving from training mode. To do this, we not only support models trained with DeepSpeed but also from other AI platforms, such as Megatron and HuggingFace. For the DeepSpeed trained models, we have the native support as we can read the checkpoints automatically. For HuffingFace trained models, the deepspeed inference engine needs to be created after the model is loaded with the target checkpoint. Here, we show an example for running the text-generation example from HuggingFace with initializing the DeepSpeed-Inference engine on the client side.
 
@@ -76,18 +76,15 @@ Below is the output of the generated text. You can try other prompt and see how 
 Regarding the Megatron trained models, we require a list of checkpoints passed in JOSN config when the model is trained with other platforms. Furthermore, the user can pass in both MP and PP size as the arguments to load the model. Below, we show loading of a model with 2 checkpoints and setting the MP size to 1. Since, the model checkpoints is larger than the MP size for inference, we have to merge the two checkpoints on-the-fly at DeepSpeed before loading the model parameters. Note that we need further information such as the type and version of checkpoint, so that the merging or splitting checkpoint does not impact inference accuracy.
 
 
-
 ```json
 "test.json":
 {
-  ...
   "type": "Megatron",
     "version": 0.0,
     "checkpoints": [
         "mp_rank_00/model_optim_rng.pt",
         "mp_rank_01/model_optim_rng.pt",
     ],
-  ...
 }
 ```
 
@@ -104,4 +101,25 @@ model = deepspeed.init_inference(model,
                                  dtype=torch.half,
                                  module_key='model',
                                  injection_policy=injection_policy)
+```
+
+We tested DeepSpeed Inference engine with the Turing-NLG model on 4 and 2 GPUs using FP16 data-format. We also can reduce the number of GPUs to 1 providing that model checkpoint is already quantized. In order to initialize deepspeed-engine when using the quantized inference kernels, the dtype should changed to torch.int8. Moreover, if you are using the DeepSpeed quantization approach ([MoQ](https://www.deepspeed.ai/posts/2021-05-05-MoQ/)), the setting by which the quantization is applied needs to be passed to the engine. This setting includes the number of groups used for quantization and whether the MLP part of transformer is quantized with extra grouping. For more information on these parameters, please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/).
+
+
+```python
+import deepspeed
+import mpu
+import deepspeed.module_inject as module_inject
+injection_policy={mpu.GPT2ParallelTransformerLayer:
+                  module_inject.replace_policy.MegatronLayerPolicy}
+model = deepspeed.init_inference(model,
+                                 mp_size=args.model_parallel_size,
+                                 mpu=mpu,
+                                 checkpoint='./test.json',
+                                 dtype=torch.int8,
+                                 module_key='model',
+                                 injection_policy=injection_policy,
+                                 quantization_setting=(quantize_groups,
+                                                       mlp_exra_grouping)
+                                )
 ```
