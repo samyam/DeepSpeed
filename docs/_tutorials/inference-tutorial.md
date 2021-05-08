@@ -7,7 +7,7 @@ DeepSpeed-Inference introduces several features to efficiently serve PyTorch-bas
 
 In this tutorial, we will go through the steps for enabling the inference through DeepSpeed by using the high-performance inference kernel for different datatypes, FP32, FP16 and INT8. Please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/) for more information on how to quantize a model.
 
-DeepSpeed provides an agile inference-mode for the PyTorch-based models, meaning that we don’t require any change on the modeling side such as exporting the model or creating a different checkpoint from your trained checkpoints. To run the inference on multi-GPU, we can configure the model on parallel GPUs based on the optimization criteria. We use model-parallelism to reduce the inference latency, since it partitions the inference workload across GPUs and each execute independently, until the results are merged through reduction operations. For the reduction operations, we use PyTorch distributed all-reduce. For more information on the DeepSpeed inference optimization, please refer to our [blog-post](TODO:add the link).
+DeepSpeed provides an agile inference-mode for the PyTorch-based models, meaning that we don’t require any change on the modeling side such as exporting the model or creating a different checkpoint from your trained checkpoints. To run the inference on multi-GPU, we can configure the model on parallel GPUs based on the optimization criteria. We use model-parallelism to reduce the inference latency, since it partitions the inference workload across GPUs and each execute independently, until the results are merged through reduction operations. For the reduction operations, we use PyTorch distributed all-reduce. For more information on the DeepSpeed inference optimization, please refer to our [blog-post](TODO: add the link to our blog post).
 
 In DeepSpeed, we have a seamless pipeline to get the model into serving from training mode. To do this, we not only support models trained with DeepSpeed but also from other AI platforms, such as Megatron and HuggingFace. For the DeepSpeed trained models, we have the native support as we can read the checkpoints automatically. For HuffingFace trained models, the deepspeed inference engine needs to be created after the model is loaded with the target checkpoint. Here, we show an example for running the text-generation example from HuggingFace with initializing the DeepSpeed-Inference engine on the client side.
 
@@ -65,7 +65,7 @@ if torch.distributed.get_rank() == 0:
 
 ```
 
-Below is the output of the generated text. You can try other prompt and see how this model generates text.
+Below is an output of the generated text.  You can try other prompt and see how this model generates text.
 
 ```log
 [{
