@@ -3,15 +3,13 @@ title: "DeepSpeed-Inference: Fast serving large-scale models with Multi-GPU infe
 excerpt: ""
 ---
 
-DeepSpeed-Inference introduces several features to efficiently serve PyTorch-based models. As the new NLP and vision transformer models get larger and larger every year, we see the need for multi-GPU inference to be able to serve these big models. To this end, we support model parallelism (MP) to fit the model as well as to reduce latency for inference. Furthermore, we also introduce inference-customized kernels to reduce latency and cost of serving transformer-based models, such as Bert- and GPT-like models. Finally, we propose a novel approach to quantize models, called MoQ, to both shrink the model and reduce the inference-cost at production. For more details on the inference related optimizations in DeepSpeed, please refer to our [blog-post](TODO: add the link to our blog post).
+DeepSpeed-Inference introduces several features to efficiently serve transformer-based PyTorch models. It support model parallelism (MP) to fit large models that would otherwise not fit in GPU memory. Even for smaller models, MP can be used to reduce latency for inference. To further reduce latency and cost, we introduce inference-customized kernels. Finally, we propose a novel approach to quantize models, called MoQ, to both shrink the model and reduce the inference-cost at production. For more details on the inference related optimizations in DeepSpeed, please refer to our [blog-post](TODO: add the link to our blog post).
 
-In this tutorial, we will go through the steps for enabling high-performance inference kernels with DeepSpeed for different datatypes, FP32, FP16 and INT8. Please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/) for more information on how to quantize a model.
+DeepSpeed provides a seamless inference-mode for compatible transformer based models trained using DeepSpeed, Megatron and HuggingFace, meaning that we don’t require any change on the modeling side such as exporting the model or creating a different checkpoint from your trained checkpoints. To run inference on multi-GPU for compatible models, simply provide the model parallelism degree and the checkpoint information, and Deepspeed will do the rest. It will automatically partition the model as necessary, inject compatible high performance kernels into your model and manage the inter-gpu communication. For list of compatible models please see here. (TODO:add a link to a page containing all the compatible models that we have multi-gpu and kernel support for).
 
-DeepSpeed provides a seamless inference-mode for PyTorch models trained using DeepSpeed, Megatron and HuggingFace, meaning that we don’t require any change on the modeling side such as exporting the model or creating a different checkpoint from your trained checkpoints. To run inference on multi-GPU for compatible models, simply provide the model parallelism degree and the checkpoint information, and Deepspeed will do the rest. It will automatically partition the model as necessary, inject compatible high performance kernels into your model and manage the inter-gpu communication. For list of compatible models please see here. (TODO:add a link to a page containing all the compatible models that we have multi-gpu and kernel support for).
+<h3>Initializing for Inference</h3>
 
-##Initializing for Inference##
-
-To serve the model with DeepSpeed, use `init_inference` API to load the model for inference. Here, you can specify the MP degree, and if the model has not be loaded with the appropriate checkpoint, you can also provide the checkpoint description using a `json` file.     
+To inference the model with DeepSpeed, use `init_inference` API to load the model for inference. Here, you can specify the MP degree, and if the model has not be loaded with the appropriate checkpoint, you can also provide the checkpoint description using a `json` file.     
 
 ```python
 # create the model
@@ -34,7 +32,7 @@ output = model('Input String')
 
 <h3>Loading Checkpoints</h3>
 
-For the models trained using HuggingFace, the model checkpoint can be pre-loaded using the `from_pretrained` API as shown above. For Megatron-LM models already trained with model parallelism, we require a list of all the model parallel checkpoints passed in JOSN config as shown below. Here, we load a Megatron-LM checkpoint trained using model parallelism degree of 2. 
+For the models trained using HuggingFace, the model checkpoint can be pre-loaded using the `from_pretrained` API as shown above. For Megatron-LM models trained with model parallelism, we require a list of all the model parallel checkpoints passed in JOSN config. Below we show how to load a Megatron-LM checkpoint trained using MP=2. 
 
 ```json
 "checkpoint.json":
@@ -57,24 +55,22 @@ For models that are trained with DeepSpeed, the checkpoint `json` file only requ
 }
 ```
 
-> DeepSpeed supports running different model parallelism degree for inference than from training. For example, a model trained without any MP can be run with 2 way MP. A model trained with MP=4 can be inferened without any MP. DeepSpeed automatically merges or split checkpoints during intialization.
+> DeepSpeed supports running different MP degree for inference than from training. For example, a model trained without any MP can be run with MP=2, or a model trained with MP=4 can be inferened without any MP. DeepSpeed automatically merges or split checkpoints during intialization as necessary.
 
+<h3>Launching</h3>
 
-For the DeepSpeed trained models, we have the native support as we can read the checkpoints automatically. For HuffingFace trained models, the deepspeed inference engine needs to be created after the model is loaded with the target checkpoint. Here, we show an example for running the text-generation example from HuggingFace with initializing the DeepSpeed-Inference engine on the client side.
+Simply use the Deepspeed launcher `deepspeed` to launch your inference on multiple GPUs. 
 
 ```bash
-deepspeed --num_gpus 1 run_generation.py \
-    --model_type=gpt2 \
-    --model_name_or_path=gpt2 \
-    --sample_input test_query.txt \
-    --fp16
+deepspeed --num_gpus 2 inference.py
 ```
 
-The modification on the client side to include DeepSpeed-Inference pipeline:
+<h3>End-to-End GPT NEO 2.7B Inference</h3>
 
-DeepSpeed Inference engine can also be combined with the HuggingFace pipeline integration. Here, we use the GPT-Neo as an example. The following script will create a text-generation pipeline with having the DeepSpeed-Inference engine initialized before generationg the text for the sample prompt, "DeepSpeed is ". Note that here we can run the inference on multiple GPUs using the model-parallel tensor-slicing across GPUs.
+DeepSpeed inference can be used in conjunction with HuggingFace `pipeline`. Below is the end-to-end client code combining DeepSpeed inference with HuggingFace `pipeline` for generating text using the GPT-NEO-2.7B model.
 
 ```python
+# Filename: gpt-neo-2.7b-generation.py
 import transformers
 from transformers import pipeline
 
@@ -83,20 +79,21 @@ generator = pipeline('text-generation', model='EleutherAI/gpt-neo-2.7B')
 import deepspeed
 import torch
 from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoBlock as gpt_neo
-import deepspeed.module_inject as module_inject
 
-injection_policy={gpt_neo: module_inject.replace_policy.HFGPTNEOLayerPolicy}
 deepspeed.init_inference(generator.model,
                          mp_size=2,
-                         dtype=torch.float,
-                         injection_policy=injection_policy)
+                         dtype=torch.float)
 
 string = generator("DeepSpeed is", do_sample=True, min_length=50)
 if torch.distributed.get_rank() == 0:
     print(string)
 
 ```
+The above script modifies the model in HuggingFace text-generation pipeline to use DeepSpeed inference. Note that here we can run the inference on multiple GPUs using the model-parallel tensor-slicing across GPUs even though the original model was trained without any model parallelism and the checkpoint is also a single GPU checkpoint. To run the client simply run:
 
+```bash
+deepspeed --num_gpus 2 gpt-neo-2.7b-generation.py
+```
 Below is an output of the generated text.  You can try other prompt and see how this model generates text.
 
 ```log
@@ -105,53 +102,19 @@ Below is an output of the generated text.  You can try other prompt and see how 
 }]
 ```
 
-Regarding the Megatron trained models, we require a list of checkpoints passed in JOSN config when the model is trained with other platforms. Furthermore, the user can pass in both MP and PP size as the arguments to load the model. Below, we show loading of a model with 2 checkpoints and setting the MP size to 1. Since, the model checkpoints is larger than the MP size for inference, we have to merge the two checkpoints on-the-fly at DeepSpeed before loading the model parameters. Note that we need further information such as the type and version of checkpoint, so that the merging or splitting checkpoint does not impact inference accuracy.
+<h3>Datatypes and Quantized Models<\h3>
 
-
-```json
-"test.json":
-{
-  "type": "Megatron",
-    "version": 0.0,
-    "checkpoints": [
-        "mp_rank_00/model_optim_rng.pt",
-        "mp_rank_01/model_optim_rng.pt",
-    ],
-}
-```
+DeepSpeed inference supports fp32, fp16 and int8 parameters. The appropriate datatype can be set using dtype in `init_inference`, and DeepSpeed will chose the kernels optimized for that datatype. For quantized int8 models, if the model was quantized using DeepSpeed's quantization approach ([MoQ](https://www.deepspeed.ai/posts/2021-05-05-MoQ/)), the setting by which the quantization is applied needs to be passed to the engine. This setting includes the number of groups used for quantization and whether the MLP part of transformer is quantized with extra grouping. For more information on these parameters, please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/).
 
 ```python
 import deepspeed
-import mpu
 import deepspeed.module_inject as module_inject
-injection_policy={mpu.GPT2ParallelTransformerLayer:
-                  module_inject.replace_policy.MegatronLayerPolicy}
 model = deepspeed.init_inference(model,
-                                 mp_size=args.model_parallel_size,
-                                 mpu=mpu,
-                                 checkpoint='./test.json',
-                                 dtype=torch.half,
-                                 module_key='model',
-                                 injection_policy=injection_policy)
-```
-
-We tested DeepSpeed Inference engine with the Turing-NLG model on 4 and 2 GPUs using FP16 data-format. We also can reduce the number of GPUs to 1 providing that model checkpoint is already quantized. In order to initialize deepspeed-engine when using the quantized inference kernels, the dtype should changed to torch.int8. Moreover, if you are using the DeepSpeed quantization approach ([MoQ](https://www.deepspeed.ai/posts/2021-05-05-MoQ/)), the setting by which the quantization is applied needs to be passed to the engine. This setting includes the number of groups used for quantization and whether the MLP part of transformer is quantized with extra grouping. For more information on these parameters, please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/).
-
-
-```python
-import deepspeed
-import mpu
-import deepspeed.module_inject as module_inject
-injection_policy={mpu.GPT2ParallelTransformerLayer:
-                  module_inject.replace_policy.MegatronLayerPolicy}
-model = deepspeed.init_inference(model,
-                                 mp_size=args.model_parallel_size,
-                                 mpu=mpu,
-                                 checkpoint='./test.json',
+                                 checkpoint='./checkpoint.json',
                                  dtype=torch.int8,
-                                 module_key='model',
-                                 injection_policy=injection_policy,
                                  quantization_setting=(quantize_groups,
                                                        mlp_exra_grouping)
                                 )
 ```
+
+Congratulations! You have completed DeepSpeed inference Tutorial.
