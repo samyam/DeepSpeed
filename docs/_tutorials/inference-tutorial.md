@@ -13,7 +13,7 @@ To inference the model with DeepSpeed, use `init_inference` API to load the mode
 if args.pre_load_checkpoint:
     model = model_class.from_pretrained(args.model_name_or_path)
 else:
-    model = model_class.reintialize(args.model_name_or_path)
+    model = model_class()
 ...
 
 import deepspeed
