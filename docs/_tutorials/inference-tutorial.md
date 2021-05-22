@@ -102,9 +102,9 @@ Below is an output of the generated text.  You can try other prompt and see how 
 }]
 ```
 
-<h3>Datatypes and Quantized Models<\h3>
+<h3>Datatypes and Quantized Models</h3>
 
-DeepSpeed inference supports fp32, fp16 and int8 parameters. The appropriate datatype can be set using dtype in `init_inference`, and DeepSpeed will chose the kernels optimized for that datatype. For quantized int8 models, if the model was quantized using DeepSpeed's quantization approach ([MoQ](https://www.deepspeed.ai/posts/2021-05-05-MoQ/)), the setting by which the quantization is applied needs to be passed to the engine. This setting includes the number of groups used for quantization and whether the MLP part of transformer is quantized with extra grouping. For more information on these parameters, please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/).
+DeepSpeed inference supports fp32, fp16 and int8 parameters. The appropriate datatype can be set using dtype in `init_inference`, and DeepSpeed will chose the kernels optimized for that datatype. For quantized int8 models, if the model was quantized using DeepSpeed's quantization approach ([MoQ](https://www.deepspeed.ai/posts/2021-05-05-MoQ/)), the setting by which the quantization is applied needs to be passed to the `init_inference`. This setting includes the number of groups used for quantization and whether the MLP part of transformer is quantized with extra grouping. For more information on these parameters, please visit our [quantization tutorial](https://www.deepspeed.ai/tutorials/MoQ-tutorial/).
 
 ```python
 import deepspeed
