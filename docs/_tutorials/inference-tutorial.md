@@ -9,6 +9,8 @@ In this tutorial, we will go through the steps for enabling high-performance inf
 
 DeepSpeed provides a seamless inference-mode for PyTorch models trained using DeepSpeed, Megatron and HuggingFace, meaning that we don’t require any change on the modeling side such as exporting the model or creating a different checkpoint from your trained checkpoints. To run inference on multi-GPU for compatible models, simply provide the model parallelism degree and the checkpoint information, and Deepspeed will do the rest. It will automatically partition the model as necessary, inject compatible high performance kernels into your model and manage the inter-gpu communication. For list of compatible models please see here. (TODO:add a link to a page containing all the compatible models that we have multi-gpu and kernel support for).
 
+##Initializing for Inference##
+
 To serve the model with DeepSpeed, use `init_inference` API to load the model for inference. Here, you can specify the MP degree, and if the model has not be loaded with the appropriate checkpoint, you can also provide the checkpoint description using a `json` file.     
 
 ```python
@@ -29,6 +31,8 @@ ds_engine = deepspeed.init_inference(model,
 model = ds_engine.module
 output = model('Input String')
 ```
+
+<h3>Loading Checkpoints</h3>
 
 For the models trained using HuggingFace, the model checkpoint can be pre-loaded using the `from_pretrained` API as shown above. For Megatron-LM models already trained with model parallelism, we require a list of all the model parallel checkpoints passed in JOSN config as shown below. Here, we load a Megatron-LM checkpoint trained using model parallelism degree of 2. 
 
@@ -52,7 +56,8 @@ For models that are trained with DeepSpeed, the checkpoint `json` file only requ
     "checkpoint_path": /home/path_to_checkpoints,
 }
 ```
-DeepSpeed support running different model parallelism degree for inference than from training. For example, a model trained without any model parallelism can be run with 2 way 
+
+> DeepSpeed supports running different model parallelism degree for inference than from training. For example, a model trained without any MP can be run with 2 way MP. A model trained with MP=4 can be inferened without any MP. DeepSpeed automatically merges or split checkpoints during intialization.
 
 
 For the DeepSpeed trained models, we have the native support as we can read the checkpoints automatically. For HuffingFace trained models, the deepspeed inference engine needs to be created after the model is loaded with the target checkpoint. Here, we show an example for running the text-generation example from HuggingFace with initializing the DeepSpeed-Inference engine on the client side.
