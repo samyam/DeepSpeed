@@ -30,6 +30,7 @@ collections:
     output: true
     permalink: /:collection/:path/
     order:
+      - mixture-of-experts.md
       - advanced-install.md
       - getting-started.md
       - azure.md
@@ -41,7 +42,6 @@ collections:
       - gan.md
       - lrrt.md
       - megatron.md
-      - mixture-of-experts.md
       - one-cycle.md
       - onebit-adam.md
       - onebit-lamb.md
