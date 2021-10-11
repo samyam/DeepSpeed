@@ -7,8 +7,8 @@ title: "Training your large model with DeepSpeed"
 DeepSpeed has been used to train or is in the process of training some of the largest dense models in existence. These include but not limited to:
 
 <!-- Placeholder -->
-* (Big Science)[https://bigscience.huggingface.co/] (near 200 billion parameter) model, in collaboration with Hugging Face and hundreds of researchers around the world.
-* (Turing-NLG)[https://www.microsoft.com/en-us/research/blog/turing-nlg-a-17-billion-parameter-language-model-by-microsoft/] (17.2 billion parameters) trained by Microsoft
+* [Big Science](https://bigscience.huggingface.co/) (near 200 billion parameter) model, in collaboration with Hugging Face and hundreds of researchers around the world.
+* [Turing-NLG](https://www.microsoft.com/en-us/research/blog/turing-nlg-a-17-billion-parameter-language-model-by-microsoft/) (17.2 billion parameters) trained by Microsoft
 
 DeepSpeed offers a collection of system technologies, that has made it possible to train models at these scales. The best technology to train your large model depends on various factors such as the model architecture, batch size, inter-connect bandwidth, etc. Given the number of available choices, this can be confusing and outright daunting. This page is meant as a starting guide to help you navigate your journey towards training your large model.
 
@@ -27,9 +27,9 @@ Since, ZeRO is a replacement to data parallelism, it offers a seamless integrati
 
 ## Deciding which technology to use
 
-*3D Parallelism for GPT-2/GPT-3 like models*: If you are attempting to train a model whose architecture resembles very closely with GPT-2 or GPT-3, then we have already done the hard work of porting 3D parallelism to a GPT-2/GPT-3 architecture-based model and have created a training pipeline that you can use to efficiently train models with hundreds of billion or even trillions of parameters. <!-- Placeholder --> To use 3D parallelism to scale your model please see our (tutorial)[https://www.deepspeed.ai/tutorials/pipeline/].
+*3D Parallelism for GPT-2/GPT-3 like models*: If you are attempting to train a model whose architecture resembles very closely with GPT-2 or GPT-3, then we have already done the hard work of porting 3D parallelism to a GPT-2/GPT-3 architecture-based model and have created a training pipeline that you can use to efficiently train models with hundreds of billion or even trillions of parameters. <!-- Placeholder --> To use 3D parallelism to scale your model please see our [tutorial](https://www.deepspeed.ai/tutorials/pipeline/).
 
-*ZeRO based technologies*: For most training scenarios, ZeRO offer training efficiency that is on par with 3D parallelism without requiring model code refactoring. Therefore, if you do not already have your code ported to use 3D parallelism, we suggest first trying ZeRO lines of technology to see if it fits your need. Adding ZeRO to your training pipeline with DeepSpeed is simple and does not require you to make changes to your model.  Given the trivial cost of trying out ZeRO with DeepSpeed, it is the fastest way to evaluate and decide if you should further invest in porting your model to use 3D parallelism. To get started with ZeRO, please see our (tutorial)[https://www.deepspeed.ai/tutorials/zero/].
+*ZeRO based technologies*: For most training scenarios, ZeRO offer training efficiency that is on par with 3D parallelism without requiring model code refactoring. Therefore, if you do not already have your code ported to use 3D parallelism, we suggest first trying ZeRO lines of technology to see if it fits your need. Adding ZeRO to your training pipeline with DeepSpeed is simple and does not require you to make changes to your model.  Given the trivial cost of trying out ZeRO with DeepSpeed, it is the fastest way to evaluate and decide if you should further invest in porting your model to use 3D parallelism. To get started with ZeRO, please see our [tutorial](https://www.deepspeed.ai/tutorials/zero/).
 
 ## Understanding performance tradeoff between ZeRO and 3D Parallelism
 
